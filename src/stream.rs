@@ -1,26 +1,46 @@
-use burster::{Limiter, SlidingWindowCounter};
-use futures::{Stream, StreamExt};
+use crate::payload::ChokeItem;
+use burster::{
+    Limiter,
+    SlidingWindowCounter,
+};
+use futures::{
+    Stream,
+    StreamExt,
+};
 use rand::Rng;
-use std::collections::VecDeque;
-use std::pin::Pin;
-use std::task::{Context, Poll};
-use std::time::Duration;
-
 #[cfg(not(target_arch = "wasm32"))]
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{
+    SystemTime,
+    UNIX_EPOCH,
+};
+use std::{
+    collections::VecDeque,
+    pin::Pin,
+    task::{
+        Context,
+        Poll,
+    },
+    time::Duration,
+};
 #[cfg(not(target_arch = "wasm32"))]
-use tokio::time::{interval, Interval};
+use tokio::time::{
+    interval,
+    Interval,
+};
 #[cfg(not(target_arch = "wasm32"))]
 use tokio_util::time::DelayQueue;
-
 #[cfg(target_arch = "wasm32")]
 use wasmtimer::{
-    std::{SystemTime, UNIX_EPOCH},
-    tokio::{interval, Interval},
+    std::{
+        SystemTime,
+        UNIX_EPOCH,
+    },
+    tokio::{
+        interval,
+        Interval,
+    },
     tokio_util::DelayQueue,
 };
-
-use crate::payload::ChokeItem;
 
 /// A traffic shaper that can simulate various network conditions.
 ///
@@ -76,6 +96,7 @@ pub struct ChokeStream<T> {
     latency_distribution: Option<Box<dyn FnMut() -> Option<Duration> + Send + Sync>>,
     drop_probability: f64,
     corrupt_probability: f64,
+    duplicate_probability: f64,
     bandwidth_limiter: Option<SlidingWindowCounter<fn() -> Duration>>,
     bandwidth_timer: Option<Interval>,
 }
@@ -89,6 +110,7 @@ impl<T> ChokeStream<T> {
             latency_distribution: None,
             drop_probability: 0.0,
             corrupt_probability: 0.0,
+            duplicate_probability: 0.0,
             bandwidth_limiter: None,
             bandwidth_timer: None,
         }
@@ -98,7 +120,7 @@ impl<T> ChokeStream<T> {
     pub fn set_bandwidth_limit(&mut self, bytes_per_seconds: usize) {
         self.bandwidth_limiter = Some(SlidingWindowCounter::new_with_time_provider(
             bytes_per_seconds as _,
-            1000, /*ms*/
+            1000, /* ms */
             || SystemTime::now().duration_since(UNIX_EPOCH).unwrap(),
         ));
         self.bandwidth_timer = Some(interval(Duration::from_millis(100)));
@@ -120,6 +142,11 @@ impl<T> ChokeStream<T> {
     /// Set the probability of packet corruption (0.0 to 1.0).
     pub fn set_corrupt_probability(&mut self, probability: f64) {
         self.corrupt_probability = probability;
+    }
+
+    /// Set the probability of packet duplication (0.0 to 1.0).
+    pub fn set_duplicate_probability(&mut self, probability: f64) {
+        self.duplicate_probability = probability;
     }
 }
 
@@ -154,11 +181,22 @@ where
                     // Simulate latency using the user-defined distribution
                     let delay = this.latency_distribution.as_mut().and_then(|latency_fn| latency_fn());
 
+                    // Simulate packet duplication
+                    let duplicate_packet = if rng.gen::<f64>() < this.duplicate_probability {
+                        Some(packet.clone())
+                    } else {
+                        None
+                    };
+
                     // Insert the packet into the DelayQueue with the calculated delay
                     if let Some(delay) = delay {
                         this.delay_queue.insert(packet, delay);
                     } else {
                         this.queue.push_back(packet);
+                    }
+
+                    if let Some(duplicate_packet) = duplicate_packet {
+                        this.queue.push_back(duplicate_packet);
                     }
                 }
 
@@ -198,7 +236,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use bytes::Bytes;
     use futures::stream::StreamExt;
     use tokio::sync::mpsc;
