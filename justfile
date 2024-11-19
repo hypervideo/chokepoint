@@ -1,8 +1,8 @@
 default:
     just --list
 
-run:
-    cargo run
+example:
+    cargo run --release --example simple
 
 test:
     cargo nextest run

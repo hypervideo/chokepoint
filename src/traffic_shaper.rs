@@ -79,6 +79,7 @@ pub struct TrafficShaper<T> {
     drop_probability: f64,
     corrupt_probability: f64,
     bandwidth_limiter: Option<SlidingWindowCounter<fn() -> std::time::Duration>>,
+    bandwidth_timer: Option<tokio::time::Interval>,
 }
 
 impl<T> TrafficShaper<T> {
@@ -91,6 +92,7 @@ impl<T> TrafficShaper<T> {
             drop_probability: 0.0,
             corrupt_probability: 0.0,
             bandwidth_limiter: None,
+            bandwidth_timer: None,
         }
     }
 
@@ -105,6 +107,7 @@ impl<T> TrafficShaper<T> {
                     .unwrap()
             },
         ));
+        self.bandwidth_timer = Some(tokio::time::interval(Duration::from_millis(100)));
     }
 
     /// Set the latency distribution function.
@@ -141,8 +144,21 @@ where
             match (
                 this.stream.poll_next_unpin(cx),
                 this.delay_queue.poll_expired(cx),
+                this.bandwidth_timer
+                    .as_mut()
+                    .map(|timer| timer.poll_tick(cx)),
             ) {
-                (Poll::Ready(Some(packet)), _) => {
+                (Poll::Ready(Some(mut packet)), _, _) => {
+                    // Simulate packet loss
+                    if rng.gen::<f64>() < this.drop_probability {
+                        continue;
+                    }
+
+                    // Simulate packet corruption
+                    if rng.gen::<f64>() < this.corrupt_probability {
+                        packet.corrupt();
+                    }
+
                     // Simulate latency using the user-defined distribution
                     let delay = this
                         .latency_distribution
@@ -157,11 +173,13 @@ where
                     }
                 }
 
-                (_, Poll::Ready(Some(expired))) => {
+                (_, Poll::Ready(Some(expired)), _) => {
                     this.queue.push_back(expired.into_inner());
                 }
 
-                (Poll::Ready(None), _) if this.delay_queue.is_empty() && this.queue.is_empty() => {
+                (Poll::Ready(None), _, _)
+                    if this.delay_queue.is_empty() && this.queue.is_empty() =>
+                {
                     return Poll::Ready(None);
                 }
 
@@ -173,27 +191,18 @@ where
         }
 
         // Retrieve packets from the normal or delay queue
-        while let Some(mut packet) = this.queue.pop_front() {
-            // Simulate packet loss
-            if rng.gen::<f64>() < this.drop_probability {
-                continue;
-            }
-
-            // Simulate packet corruption
-            if rng.gen::<f64>() < this.corrupt_probability {
-                packet.corrupt();
-            }
-
-            // Simulate bandwidth limitation by adjusting the delay
-            if let Some(limiter) = &mut this.bandwidth_limiter {
+        if let Some(packet) = this.queue.pop_front() {
+            // Simulate bandwidth limitation
+            if let (Some(limiter), Some(timer)) =
+                (&mut this.bandwidth_limiter, &mut this.bandwidth_timer)
+            {
                 if limiter.try_consume(packet.byte_len() as _).is_err() {
                     // If the packet cannot be sent due to bandwidth limitation, reinsert it into the queue
-                    // this.delay_queue.insert(packet, Duration::from_millis(10));
                     this.queue.push_front(packet);
-                    continue;
+                    timer.reset(); // to wake up later without busy waking
+                    return Poll::Pending;
                 }
-            };
-
+            }
             return Poll::Ready(Some(packet));
         }
 

@@ -10,8 +10,10 @@
 //!
 //! See [`TrafficShaper`] for more information.
 
+mod latency;
 mod payload;
 mod traffic_shaper;
 
+pub use latency::*;
 pub use payload::TrafficShaperPayload;
 pub use traffic_shaper::TrafficShaper;
