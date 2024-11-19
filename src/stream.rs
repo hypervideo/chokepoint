@@ -1,18 +1,3 @@
-use crate::payload::ChokeItem;
-use burster::{
-    Limiter,
-    SlidingWindowCounter,
-};
-use futures::{
-    Stream,
-    StreamExt,
-};
-use rand::Rng;
-#[cfg(not(target_arch = "wasm32"))]
-use std::time::{
-    SystemTime,
-    UNIX_EPOCH,
-};
 use std::{
     collections::VecDeque,
     pin::Pin,
@@ -23,12 +8,28 @@ use std::{
     time::Duration,
 };
 #[cfg(not(target_arch = "wasm32"))]
+use std::time::{
+    SystemTime,
+    UNIX_EPOCH,
+};
+
+use burster::{
+    Limiter,
+    SlidingWindowCounter,
+};
+use futures::{
+    Stream,
+    StreamExt,
+};
+use rand::Rng;
+#[cfg(not(target_arch = "wasm32"))]
 use tokio::time::{
     interval,
     Interval,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use tokio_util::time::DelayQueue;
+
 #[cfg(target_arch = "wasm32")]
 use wasmtimer::{
     std::{
@@ -41,6 +42,8 @@ use wasmtimer::{
     },
     tokio_util::DelayQueue,
 };
+
+use crate::payload::ChokeItem;
 
 /// A traffic shaper that can simulate various network conditions.
 ///
@@ -182,10 +185,8 @@ where
                     let delay = this.latency_distribution.as_mut().and_then(|latency_fn| latency_fn());
 
                     // Simulate packet duplication
-                    let duplicate_packet = if rng.gen::<f64>() < this.duplicate_probability {
-                        Some(packet.clone())
-                    } else {
-                        None
+                    if rng.gen::<f64>() < this.duplicate_probability {
+                        this.queue.push_back(packet.clone());
                     };
 
                     // Insert the packet into the DelayQueue with the calculated delay
@@ -193,10 +194,6 @@ where
                         this.delay_queue.insert(packet, delay);
                     } else {
                         this.queue.push_back(packet);
-                    }
-
-                    if let Some(duplicate_packet) = duplicate_packet {
-                        this.queue.push_back(duplicate_packet);
                     }
                 }
 
@@ -235,11 +232,12 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use bytes::Bytes;
     use futures::stream::StreamExt;
     use tokio::sync::mpsc;
     use tokio_stream::wrappers::UnboundedReceiverStream;
+
+    use super::*;
 
     #[tokio::test]
     async fn delivery_without_modifications() {
