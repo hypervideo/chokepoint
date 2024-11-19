@@ -20,3 +20,40 @@ impl TrafficShaperPayload for Bytes {
         *self = packet_modified.freeze();
     }
 }
+
+impl<T, E> TrafficShaperPayload for Result<T, E>
+where
+    T: TrafficShaperPayload,
+    E: Unpin + Send + Sync + 'static,
+{
+    fn byte_len(&self) -> usize {
+        match self {
+            Ok(payload) => payload.byte_len(),
+            Err(_) => 0,
+        }
+    }
+
+    fn corrupt(&mut self) {
+        if let Ok(payload) = self {
+            payload.corrupt();
+        }
+    }
+}
+
+impl<T> TrafficShaperPayload for Option<T>
+where
+    T: TrafficShaperPayload,
+{
+    fn byte_len(&self) -> usize {
+        match self {
+            Some(payload) => payload.byte_len(),
+            None => 0,
+        }
+    }
+
+    fn corrupt(&mut self) {
+        if let Some(payload) = self {
+            payload.corrupt();
+        }
+    }
+}
