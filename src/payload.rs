@@ -2,13 +2,13 @@ use bytes::{Bytes, BytesMut};
 use rand::Rng;
 
 /// A trait for payloads that can be used with the TrafficShaper.
-pub trait TrafficShaperPayload: Unpin + Send + Sync + 'static {
+pub trait ChokeItem: Unpin + Send + Sync + 'static {
     fn byte_len(&self) -> usize;
 
     fn corrupt(&mut self);
 }
 
-impl TrafficShaperPayload for Bytes {
+impl ChokeItem for Bytes {
     fn byte_len(&self) -> usize {
         Bytes::len(self)
     }
@@ -21,9 +21,9 @@ impl TrafficShaperPayload for Bytes {
     }
 }
 
-impl<T, E> TrafficShaperPayload for Result<T, E>
+impl<T, E> ChokeItem for Result<T, E>
 where
-    T: TrafficShaperPayload,
+    T: ChokeItem,
     E: Unpin + Send + Sync + 'static,
 {
     fn byte_len(&self) -> usize {
@@ -40,9 +40,9 @@ where
     }
 }
 
-impl<T> TrafficShaperPayload for Option<T>
+impl<T> ChokeItem for Option<T>
 where
-    T: TrafficShaperPayload,
+    T: ChokeItem,
 {
     fn byte_len(&self) -> usize {
         match self {

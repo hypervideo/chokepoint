@@ -16,8 +16,8 @@
 
 mod latency;
 mod payload;
-mod traffic_shaper;
+mod stream;
 
 pub use latency::*;
-pub use payload::TrafficShaperPayload;
-pub use traffic_shaper::TrafficShaper;
+pub use payload::ChokeItem;
+pub use stream::ChokeStream;

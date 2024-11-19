@@ -1,5 +1,5 @@
 use bytes::Bytes;
-use chokepoint::{normal_distribution, TrafficShaper};
+use chokepoint::{normal_distribution, ChokeStream};
 use chrono::{prelude::*, Duration};
 use futures::stream::StreamExt;
 use tokio::sync::mpsc;
@@ -9,7 +9,7 @@ use tokio_stream::wrappers::ReceiverStream;
 async fn main() {
     let (tx, rx) = mpsc::channel(5);
 
-    let mut traffic_shaper = TrafficShaper::new(Box::new(ReceiverStream::new(rx)));
+    let mut traffic_shaper = ChokeStream::new(Box::new(ReceiverStream::new(rx)));
 
     traffic_shaper.set_latency_distribution(normal_distribution(10.0, 15.0, 100.0));
     traffic_shaper.set_drop_probability(0.1);

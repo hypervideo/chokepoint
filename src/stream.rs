@@ -20,7 +20,7 @@ use wasmtimer::{
     tokio_util::DelayQueue,
 };
 
-use crate::payload::TrafficShaperPayload;
+use crate::payload::ChokeItem;
 
 /// A traffic shaper that can simulate various network conditions.
 ///
@@ -69,7 +69,7 @@ use crate::payload::TrafficShaperPayload;
 /// }
 /// # }
 /// ```
-pub struct TrafficShaper<T> {
+pub struct ChokeStream<T> {
     stream: Box<dyn Stream<Item = T> + Unpin>,
     queue: VecDeque<T>,
     delay_queue: DelayQueue<T>,
@@ -80,9 +80,9 @@ pub struct TrafficShaper<T> {
     bandwidth_timer: Option<Interval>,
 }
 
-impl<T> TrafficShaper<T> {
+impl<T> ChokeStream<T> {
     pub fn new(stream: Box<dyn Stream<Item = T> + Unpin>) -> Self {
-        TrafficShaper {
+        ChokeStream {
             stream,
             queue: VecDeque::new(),
             delay_queue: DelayQueue::new(),
@@ -123,9 +123,9 @@ impl<T> TrafficShaper<T> {
     }
 }
 
-impl<T> Stream for TrafficShaper<T>
+impl<T> Stream for ChokeStream<T>
 where
-    T: TrafficShaperPayload,
+    T: ChokeItem,
 {
     type Item = T;
 
@@ -207,7 +207,7 @@ mod tests {
     #[tokio::test]
     async fn delivery_without_modifications() {
         let (tx, rx) = mpsc::unbounded_channel();
-        let traffic_shaper = TrafficShaper::new(Box::new(UnboundedReceiverStream::new(rx)));
+        let traffic_shaper = ChokeStream::new(Box::new(UnboundedReceiverStream::new(rx)));
 
         tokio::spawn(async move {
             for i in 0..10usize {
