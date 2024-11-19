@@ -11,12 +11,14 @@ eyre = "0.6.12"
 futures = "0.3.31"
 rand = "0.8.5"
 rand_distr = "0.4.3"
-tokio = { version = "1.41.1", features = ["time", "sync"] }
+tokio = { version = "1.41.1", features = ["time"] }
 tokio-util = { version = "0.7.12", features = ["time"] }
 tracing = "0.1.40"
 
 [dev-dependencies]
 color-eyre = "0.6.3"
 tokio = { version = "1.41.1", features = ["time", "sync", "rt-multi-thread", "macros"] }
+tokio-stream = { version = "0.1.16", features = ["sync"] }
+tokio-test = "0.4.4"
 tracing-subscriber = "0.3.18"
 tracing-test = "0.2.5"

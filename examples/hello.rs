@@ -4,12 +4,13 @@ use chrono::{prelude::*, Duration};
 use futures::stream::StreamExt;
 use rand_distr::{num_traits::Float as _, Distribution as _, Normal};
 use tokio::sync::mpsc;
+use tokio_stream::wrappers::UnboundedReceiverStream;
 
 #[tokio::main]
 async fn main() {
-    let (tx, rx) = mpsc::channel(100);
+    let (tx, rx) = mpsc::unbounded_channel();
 
-    let mut traffic_shaper = TrafficShaper::new(rx);
+    let mut traffic_shaper = TrafficShaper::new(Box::new(UnboundedReceiverStream::new(rx)));
 
     // Set the latency distribution
     traffic_shaper.set_latency_distribution(|| {
@@ -30,7 +31,7 @@ async fn main() {
             let now = Utc::now().timestamp_nanos_opt().unwrap();
             data.extend_from_slice(&now.to_le_bytes());
             data.extend_from_slice(&i.to_le_bytes());
-            tx.send(Bytes::from(data)).await.unwrap();
+            tx.send(Bytes::from(data)).unwrap();
         }
     });
 

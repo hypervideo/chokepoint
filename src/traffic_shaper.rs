@@ -1,10 +1,9 @@
 use burster::{Limiter, SlidingWindowCounter};
-use futures::Stream;
+use futures::{Stream, StreamExt};
 use rand::Rng;
 use std::collections::VecDeque;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use tokio::sync::mpsc::Receiver;
 use tokio::time::Duration;
 use tokio_util::time::DelayQueue;
 
@@ -13,8 +12,67 @@ use crate::payload::TrafficShaperPayload;
 /// A traffic shaper that can simulate various network conditions.
 ///
 /// Example:
+/// ```rust
+/// # use bytes::Bytes;
+/// # use chokepoint::TrafficShaper;
+/// # use chrono::{prelude::*, Duration};
+/// # use futures::stream::StreamExt;
+/// # use rand_distr::{num_traits::Float as _, Distribution as _, Normal};
+/// # use tokio::sync::mpsc;
+/// # use tokio_stream::wrappers::UnboundedReceiverStream;
+/// #
+/// # #[tokio::main]
+/// # async fn main() {
+/// let (tx, rx) = mpsc::unbounded_channel();
+///
+/// let mut traffic_shaper = TrafficShaper::new(Box::new(UnboundedReceiverStream::new(rx)));
+///
+/// // Set the latency distribution
+/// traffic_shaper.set_latency_distribution(|| {
+///     let normal = Normal::new(10.0, 15.0).unwrap(); // mean = 10ms, std dev = 15ms
+///     let latency = normal.sample(&mut rand::thread_rng()).clamp(0.0, 100.0) as u64;
+///     (latency > 0).then(|| std::time::Duration::from_millis(latency))
+/// });
+///
+/// // Set other parameters as needed
+/// traffic_shaper.set_drop_probability(0.0);
+/// traffic_shaper.set_corrupt_probability(0.0);
+/// traffic_shaper.set_bandwidth_limit(100);
+///
+/// // Spawn a task to send packets into the TrafficShaper
+/// tokio::spawn(async move {
+///     for i in 0..10usize {
+///         let mut data = Vec::new();
+///         let now = Utc::now().timestamp_nanos_opt().unwrap();
+///         data.extend_from_slice(&now.to_le_bytes());
+///         data.extend_from_slice(&i.to_le_bytes());
+///         tx.send(Bytes::from(data)).unwrap();
+///     }
+/// });
+///
+/// // Consume the shaped traffic
+///
+/// let output = traffic_shaper
+///     .map(|packet| {
+///         let now = Utc::now().timestamp_nanos_opt().unwrap();
+///         let then = Duration::nanoseconds(i64::from_le_bytes(packet[0..8].try_into().unwrap()));
+///         let i = usize::from_le_bytes(packet[8..16].try_into().unwrap());
+///         let delta = Duration::nanoseconds(now - then.num_nanoseconds().unwrap());
+///         println!("{i}");
+///         (i, delta)
+///     })
+///     .collect::<Vec<_>>()
+///     .await;
+///
+/// // output.sort_by_key(|(i, _)| *i);
+///
+/// for (i, delta) in output {
+///     println!("[{i}] {}ms", delta.num_milliseconds());
+/// }
+/// # }
+/// ```
 pub struct TrafficShaper<T> {
-    rx: Receiver<T>,
+    stream: Box<dyn Stream<Item = T> + Unpin>,
     queue: VecDeque<T>,
     delay_queue: DelayQueue<T>,
     latency_distribution: Option<Box<dyn FnMut() -> Option<Duration> + Send + Sync>>,
@@ -24,9 +82,9 @@ pub struct TrafficShaper<T> {
 }
 
 impl<T> TrafficShaper<T> {
-    pub fn new(rx: Receiver<T>) -> Self {
+    pub fn new(stream: Box<dyn Stream<Item = T> + Unpin>) -> Self {
         TrafficShaper {
-            rx,
+            stream,
             queue: VecDeque::new(),
             delay_queue: DelayQueue::new(),
             latency_distribution: None,
@@ -80,7 +138,10 @@ where
 
         // First, take packets from the receiver and process them.
         loop {
-            match (this.rx.poll_recv(cx), this.delay_queue.poll_expired(cx)) {
+            match (
+                this.stream.poll_next_unpin(cx),
+                this.delay_queue.poll_expired(cx),
+            ) {
                 (Poll::Ready(Some(packet)), _) => {
                     // Simulate latency using the user-defined distribution
                     let delay = this
@@ -142,6 +203,29 @@ where
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn delivery_without_modifications() {}
+    use super::*;
+
+    use bytes::Bytes;
+    use futures::stream::StreamExt;
+    use tokio::sync::mpsc;
+    use tokio_stream::wrappers::UnboundedReceiverStream;
+
+    #[tokio::test]
+    async fn delivery_without_modifications() {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let traffic_shaper = TrafficShaper::new(Box::new(UnboundedReceiverStream::new(rx)));
+
+        tokio::spawn(async move {
+            for i in 0..10usize {
+                tx.send(Bytes::from(i.to_le_bytes().to_vec())).unwrap();
+            }
+        });
+
+        let output = traffic_shaper
+            .map(|packet| usize::from_le_bytes(packet[0..8].try_into().unwrap()))
+            .collect::<Vec<_>>()
+            .await;
+
+        assert_eq!(output, (0..10).collect::<Vec<_>>());
+    }
 }

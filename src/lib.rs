@@ -4,6 +4,8 @@
 //! - Delay (using a user provided function)
 //! - Packet loss
 //! - Packet reordering
+//! - Packet corruption
+//! - Packet duplication
 //! - Bandwidth limiting
 //!
 //! See [`TrafficShaper`] for more information.
