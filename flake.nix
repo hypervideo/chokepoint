@@ -25,6 +25,7 @@
             packages = with pkgs; [
               rust-analyzer
               rustfmt
+              cargo-nextest
             ];
 
             RUST_BACKTRACE = "1";

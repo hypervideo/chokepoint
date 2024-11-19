@@ -4,5 +4,6 @@ default:
 run:
     cargo run
 
-dev:
-    cargo watch -x run
+test:
+    cargo nextest run
+    cargo test --doc
