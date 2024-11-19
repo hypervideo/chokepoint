@@ -144,9 +144,7 @@ where
             match (
                 this.stream.poll_next_unpin(cx),
                 this.delay_queue.poll_expired(cx),
-                this.bandwidth_timer
-                    .as_mut()
-                    .map(|timer| timer.poll_tick(cx)),
+                this.bandwidth_timer.as_mut().map(|timer| timer.poll_tick(cx)),
             ) {
                 (Poll::Ready(Some(mut packet)), _, _) => {
                     // Simulate packet loss
@@ -160,10 +158,7 @@ where
                     }
 
                     // Simulate latency using the user-defined distribution
-                    let delay = this
-                        .latency_distribution
-                        .as_mut()
-                        .and_then(|latency_fn| latency_fn());
+                    let delay = this.latency_distribution.as_mut().and_then(|latency_fn| latency_fn());
 
                     // Insert the packet into the DelayQueue with the calculated delay
                     if let Some(delay) = delay {
@@ -177,9 +172,7 @@ where
                     this.queue.push_back(expired.into_inner());
                 }
 
-                (Poll::Ready(None), _, _)
-                    if this.delay_queue.is_empty() && this.queue.is_empty() =>
-                {
+                (Poll::Ready(None), _, _) if this.delay_queue.is_empty() && this.queue.is_empty() => {
                     return Poll::Ready(None);
                 }
 
@@ -193,9 +186,7 @@ where
         // Retrieve packets from the normal or delay queue
         if let Some(packet) = this.queue.pop_front() {
             // Simulate bandwidth limitation
-            if let (Some(limiter), Some(timer)) =
-                (&mut this.bandwidth_limiter, &mut this.bandwidth_timer)
-            {
+            if let (Some(limiter), Some(timer)) = (&mut this.bandwidth_limiter, &mut this.bandwidth_timer) {
                 if limiter.try_consume(packet.byte_len() as _).is_err() {
                     // If the packet cannot be sent due to bandwidth limitation, reinsert it into the queue
                     this.queue.push_front(packet);

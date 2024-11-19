@@ -26,6 +26,7 @@
               rust-analyzer
               rustfmt
               cargo-nextest
+              cargo-readme
             ];
 
             RUST_BACKTRACE = "1";
