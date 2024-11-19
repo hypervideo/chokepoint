@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 authors = ["Robert Krahn <robert@hyper.video>"]
-categories = ["Data structures", "Network programming"]
+categories = ["simulation", "network-programming", "asynchronous"]
 homepage = "https://github.com/hypervideo/chokepoint"
 keywords = ["network", "congestion", "traffic", "simulation"]
 license = "MPL-2.0"
