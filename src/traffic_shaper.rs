@@ -4,8 +4,21 @@ use rand::Rng;
 use std::collections::VecDeque;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use tokio::time::Duration;
+use std::time::Duration;
+
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::{SystemTime, UNIX_EPOCH};
+#[cfg(not(target_arch = "wasm32"))]
+use tokio::time::{interval, Interval};
+#[cfg(not(target_arch = "wasm32"))]
 use tokio_util::time::DelayQueue;
+
+#[cfg(target_arch = "wasm32")]
+use wasmtimer::{
+    std::{SystemTime, UNIX_EPOCH},
+    tokio::{interval, Interval},
+    tokio_util::DelayQueue,
+};
 
 use crate::payload::TrafficShaperPayload;
 
@@ -63,8 +76,8 @@ pub struct TrafficShaper<T> {
     latency_distribution: Option<Box<dyn FnMut() -> Option<Duration> + Send + Sync>>,
     drop_probability: f64,
     corrupt_probability: f64,
-    bandwidth_limiter: Option<SlidingWindowCounter<fn() -> std::time::Duration>>,
-    bandwidth_timer: Option<tokio::time::Interval>,
+    bandwidth_limiter: Option<SlidingWindowCounter<fn() -> Duration>>,
+    bandwidth_timer: Option<Interval>,
 }
 
 impl<T> TrafficShaper<T> {
@@ -86,13 +99,9 @@ impl<T> TrafficShaper<T> {
         self.bandwidth_limiter = Some(SlidingWindowCounter::new_with_time_provider(
             bytes_per_seconds as _,
             1000, /*ms*/
-            || {
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-            },
+            || SystemTime::now().duration_since(UNIX_EPOCH).unwrap(),
         ));
-        self.bandwidth_timer = Some(tokio::time::interval(Duration::from_millis(100)));
+        self.bandwidth_timer = Some(interval(Duration::from_millis(100)));
     }
 
     /// Set the latency distribution function.
