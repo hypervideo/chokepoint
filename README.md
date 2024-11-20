@@ -4,7 +4,8 @@
 [![](https://docs.rs/chokepoint/badge.svg)](https://docs.rs/chokepoint)
 [![License](https://img.shields.io/crates/l/chokepoint?color=informational&logo=mpl-2)](/LICENSE)
 
-A generic stream transformer that can be used to "shape traffic", e.g. to simulate network conditions.
+A generic `futures::Stream` and `futures::Sink` transformer that can be used to "shape traffic", e.g. to simulate
+network conditions.
 
 Supports various simulated network conditions, such as:
 - Delay (using a user provided function)
