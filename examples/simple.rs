@@ -1,6 +1,13 @@
 use bytes::Bytes;
-use chokepoint::{normal_distribution, ChokeStream};
-use chrono::{prelude::*, Duration};
+use chokepoint::{
+    normal_distribution,
+    ChokeStream,
+    ChokeStreamSettings,
+};
+use chrono::{
+    prelude::*,
+    Duration,
+};
 use futures::stream::StreamExt;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -9,12 +16,23 @@ use tokio_stream::wrappers::ReceiverStream;
 async fn main() {
     let (tx, rx) = mpsc::channel(5);
 
-    let mut traffic_shaper = ChokeStream::new(Box::new(ReceiverStream::new(rx)));
+    let mut settings = ChokeStreamSettings::default();
+    let settings_tx = settings.settings_updater();
 
-    traffic_shaper.set_latency_distribution(normal_distribution(10.0, 15.0, 100.0));
-    traffic_shaper.set_drop_probability(0.1);
-    traffic_shaper.set_corrupt_probability(0.0);
-    traffic_shaper.set_bandwidth_limit(100);
+    let mut traffic_shaper = ChokeStream::new(Box::new(ReceiverStream::new(rx)), settings);
+
+    // You can send new settings to the TrafficShaper at any time (normally you would do this on creation, this is just
+    // to showcase that).
+    settings_tx
+        .send(
+            ChokeStreamSettings::default()
+                .set_latency_distribution(normal_distribution(10.0, 15.0, 100.0))
+                .set_drop_probability(0.1)
+                .set_corrupt_probability(0.0)
+                .set_bandwidth_limit(100),
+        )
+        .await
+        .unwrap();
 
     // Spawn a task to send packets into the TrafficShaper
     tokio::spawn(async move {

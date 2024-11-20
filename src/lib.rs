@@ -20,4 +20,7 @@ mod stream;
 
 pub use latency::*;
 pub use payload::ChokeItem;
-pub use stream::ChokeStream;
+pub use stream::{
+    ChokeStream,
+    ChokeStreamSettings,
+};

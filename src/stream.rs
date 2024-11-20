@@ -1,18 +1,4 @@
-use std::{
-    collections::VecDeque,
-    pin::Pin,
-    task::{
-        Context,
-        Poll,
-    },
-    time::Duration,
-};
-#[cfg(not(target_arch = "wasm32"))]
-use std::time::{
-    SystemTime,
-    UNIX_EPOCH,
-};
-
+use crate::payload::ChokeItem;
 use burster::{
     Limiter,
     SlidingWindowCounter,
@@ -23,13 +9,27 @@ use futures::{
 };
 use rand::Rng;
 #[cfg(not(target_arch = "wasm32"))]
+use std::time::{
+    SystemTime,
+    UNIX_EPOCH,
+};
+use std::{
+    collections::VecDeque,
+    pin::Pin,
+    task::{
+        Context,
+        Poll,
+    },
+    time::Duration,
+};
+use tokio::sync::mpsc;
+#[cfg(not(target_arch = "wasm32"))]
 use tokio::time::{
     interval,
     Interval,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use tokio_util::time::DelayQueue;
-
 #[cfg(target_arch = "wasm32")]
 use wasmtimer::{
     std::{
@@ -43,13 +43,67 @@ use wasmtimer::{
     tokio_util::DelayQueue,
 };
 
-use crate::payload::ChokeItem;
+/// Settings for1
+#[derive(Default)]
+pub struct ChokeStreamSettings {
+    latency_distribution: Option<Option<Box<dyn FnMut() -> Option<Duration> + Send + Sync>>>,
+    drop_probability: Option<f64>,
+    corrupt_probability: Option<f64>,
+    duplicate_probability: Option<f64>,
+    bandwidth_limiter: Option<Option<SlidingWindowCounter<fn() -> Duration>>>,
+    settings_rx: Option<mpsc::Receiver<ChokeStreamSettings>>,
+}
+
+impl ChokeStreamSettings {
+    pub fn settings_updater(&mut self) -> mpsc::Sender<ChokeStreamSettings> {
+        let (settings_tx, settings_rx) = mpsc::channel(1);
+        self.settings_rx = Some(settings_rx);
+        settings_tx
+    }
+
+    /// Set the bandwidth limit in bytes per second.
+    pub fn set_bandwidth_limit(mut self, bytes_per_seconds: usize) -> Self {
+        self.bandwidth_limiter = Some(Some(SlidingWindowCounter::new_with_time_provider(
+            bytes_per_seconds as _,
+            1000, /* ms */
+            || SystemTime::now().duration_since(UNIX_EPOCH).unwrap(),
+        )));
+        self
+    }
+
+    /// Set the latency distribution function.
+    pub fn set_latency_distribution<F>(mut self, f: F) -> Self
+    where
+        F: FnMut() -> Option<Duration> + Send + Sync + 'static,
+    {
+        self.latency_distribution = Some(Some(Box::new(f)));
+        self
+    }
+
+    /// Set the probability of packet drop (0.0 to 1.0).
+    pub fn set_drop_probability(mut self, probability: f64) -> Self {
+        self.drop_probability = Some(probability);
+        self
+    }
+
+    /// Set the probability of packet corruption (0.0 to 1.0).
+    pub fn set_corrupt_probability(mut self, probability: f64) -> Self {
+        self.corrupt_probability = Some(probability);
+        self
+    }
+
+    /// Set the probability of packet duplication (0.0 to 1.0).
+    pub fn set_duplicate_probability(mut self, probability: f64) -> Self {
+        self.duplicate_probability = Some(probability);
+        self
+    }
+}
 
 /// A traffic shaper that can simulate various network conditions.
 ///
 /// Example:
 /// ```rust
-/// # use chokepoint::{normal_distribution, TrafficShaper};
+/// # use chokepoint::{normal_distribution, ChokeStream, ChokeStreamSettings};
 /// # use bytes::Bytes;
 /// # use chrono::{prelude::*, Duration};
 /// # use futures::stream::StreamExt;
@@ -60,17 +114,23 @@ use crate::payload::ChokeItem;
 /// # #[tokio::main]
 /// # async fn main() {
 /// let (tx, rx) = mpsc::unbounded_channel();
-/// let mut traffic_shaper = TrafficShaper::new(Box::new(UnboundedReceiverStream::new(rx)));
 ///
-/// // Set the latency distribution in milliseconds
-/// traffic_shaper.set_latency_distribution(normal_distribution(10.0 /*mean*/, 15.0 /*stddev*/, 100.0 /*max*/));
+/// let mut traffic_shaper = ChokeStream::new(
+///     Box::new(UnboundedReceiverStream::new(rx)),
+///     ChokeStreamSettings::default()
+///         // Set the latency distribution in milliseconds
+///         .set_latency_distribution(normal_distribution(
+///             10.0,  /* mean */
+///             15.0,  /* stddev */
+///             100.0, /* max */
+///         ))
+///         // Set other parameters as needed
+///         .set_drop_probability(0.0)
+///         .set_corrupt_probability(0.0)
+///         .set_bandwidth_limit(100 /* bytes per second */),
+/// );
 ///
-/// // Set other parameters as needed
-/// traffic_shaper.set_drop_probability(0.0);
-/// traffic_shaper.set_corrupt_probability(0.0);
-/// traffic_shaper.set_bandwidth_limit(100 /*bytes per second*/);
-///
-/// // Spawn a task to send packets into the TrafficShaper
+/// // Spawn a task to send packets into the ChokeStream
 /// tokio::spawn(async move {
 ///     for i in 0..10usize {
 ///         let mut data = Vec::new();
@@ -102,11 +162,12 @@ pub struct ChokeStream<T> {
     duplicate_probability: f64,
     bandwidth_limiter: Option<SlidingWindowCounter<fn() -> Duration>>,
     bandwidth_timer: Option<Interval>,
+    settings_rx: Option<mpsc::Receiver<ChokeStreamSettings>>,
 }
 
 impl<T> ChokeStream<T> {
-    pub fn new(stream: Box<dyn Stream<Item = T> + Unpin>) -> Self {
-        ChokeStream {
+    pub fn new(stream: Box<dyn Stream<Item = T> + Unpin>, settings: ChokeStreamSettings) -> Self {
+        let mut stream = ChokeStream {
             stream,
             queue: VecDeque::new(),
             delay_queue: DelayQueue::new(),
@@ -116,40 +177,34 @@ impl<T> ChokeStream<T> {
             duplicate_probability: 0.0,
             bandwidth_limiter: None,
             bandwidth_timer: None,
+            settings_rx: None,
+        };
+        stream.apply_settings(settings);
+        stream
+    }
+
+    pub fn apply_settings(&mut self, settings: ChokeStreamSettings) {
+        if let Some(settings_rx) = settings.settings_rx {
+            self.settings_rx = Some(settings_rx);
         }
-    }
-
-    /// Set the bandwidth limit in bytes per second.
-    pub fn set_bandwidth_limit(&mut self, bytes_per_seconds: usize) {
-        self.bandwidth_limiter = Some(SlidingWindowCounter::new_with_time_provider(
-            bytes_per_seconds as _,
-            1000, /* ms */
-            || SystemTime::now().duration_since(UNIX_EPOCH).unwrap(),
-        ));
-        self.bandwidth_timer = Some(interval(Duration::from_millis(100)));
-    }
-
-    /// Set the latency distribution function.
-    pub fn set_latency_distribution<F>(&mut self, f: F)
-    where
-        F: FnMut() -> Option<Duration> + Send + Sync + 'static,
-    {
-        self.latency_distribution = Some(Box::new(f));
-    }
-
-    /// Set the probability of packet drop (0.0 to 1.0).
-    pub fn set_drop_probability(&mut self, probability: f64) {
-        self.drop_probability = probability;
-    }
-
-    /// Set the probability of packet corruption (0.0 to 1.0).
-    pub fn set_corrupt_probability(&mut self, probability: f64) {
-        self.corrupt_probability = probability;
-    }
-
-    /// Set the probability of packet duplication (0.0 to 1.0).
-    pub fn set_duplicate_probability(&mut self, probability: f64) {
-        self.duplicate_probability = probability;
+        if let Some(latency_distribution) = settings.latency_distribution {
+            self.latency_distribution = latency_distribution;
+        }
+        if let Some(drop_probability) = settings.drop_probability {
+            self.drop_probability = drop_probability;
+        }
+        if let Some(corrupt_probability) = settings.corrupt_probability {
+            self.corrupt_probability = corrupt_probability;
+        }
+        if let Some(duplicate_probability) = settings.duplicate_probability {
+            self.duplicate_probability = duplicate_probability;
+        }
+        if let Some(bandwidth_limiter) = settings.bandwidth_limiter {
+            self.bandwidth_limiter = bandwidth_limiter;
+            if self.bandwidth_limiter.is_some() {
+                self.bandwidth_timer = Some(interval(Duration::from_millis(100)));
+            }
+        }
     }
 }
 
@@ -162,6 +217,10 @@ where
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
         let mut rng = rand::thread_rng();
+
+        if let Some(new_settings) = this.settings_rx.as_mut().and_then(|s| s.try_recv().ok()) {
+            this.apply_settings(new_settings);
+        }
 
         // First, take packets from the receiver and process them.
         loop {
@@ -232,17 +291,16 @@ where
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use bytes::Bytes;
     use futures::stream::StreamExt;
     use tokio::sync::mpsc;
     use tokio_stream::wrappers::UnboundedReceiverStream;
 
-    use super::*;
-
     #[tokio::test]
     async fn delivery_without_modifications() {
         let (tx, rx) = mpsc::unbounded_channel();
-        let traffic_shaper = ChokeStream::new(Box::new(UnboundedReceiverStream::new(rx)));
+        let traffic_shaper = ChokeStream::new(Box::new(UnboundedReceiverStream::new(rx)), Default::default());
 
         tokio::spawn(async move {
             for i in 0..10usize {
