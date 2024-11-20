@@ -45,6 +45,7 @@ use wasmtimer::{
 
 /// Settings for1
 #[derive(Default)]
+#[allow(clippy::type_complexity)]
 pub struct ChokeStreamSettings {
     latency_distribution: Option<Option<Box<dyn FnMut() -> Option<Duration> + Send + Sync>>>,
     drop_probability: Option<f64>,
@@ -245,8 +246,12 @@ where
 
                     // Simulate packet duplication
                     if rng.gen::<f64>() < this.duplicate_probability {
-                        this.queue.push_back(packet.clone());
-                    };
+                        if let Some(packet) = packet.duplicate() {
+                            this.queue.push_back(packet);
+                        } else {
+                            tracing::warn!("Failed to duplicate packet");
+                        }
+                    }
 
                     // Insert the packet into the DelayQueue with the calculated delay
                     if let Some(delay) = delay {
