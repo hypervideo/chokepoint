@@ -1,8 +1,8 @@
 use bytes::Bytes;
 use chokepoint::{
     normal_distribution,
+    ChokeSettings,
     ChokeStream,
-    ChokeStreamSettings,
 };
 use chrono::{
     prelude::*,
@@ -14,9 +14,13 @@ use tokio_stream::wrappers::ReceiverStream;
 
 #[tokio::main]
 async fn main() {
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::builder().parse_lossy("trace"))
+        .init();
+
     let (tx, rx) = mpsc::channel(5);
 
-    let mut settings = ChokeStreamSettings::default();
+    let mut settings = ChokeSettings::default();
     let settings_tx = settings.settings_updater();
 
     let mut traffic_shaper = ChokeStream::new(Box::new(ReceiverStream::new(rx)), settings);
@@ -25,9 +29,9 @@ async fn main() {
     // to showcase that).
     settings_tx
         .send(
-            ChokeStreamSettings::default()
+            ChokeSettings::default()
                 .set_latency_distribution(normal_distribution(10.0, 15.0, 100.0))
-                .set_drop_probability(0.1)
+                .set_drop_probability(0.3)
                 .set_corrupt_probability(0.0)
                 .set_bandwidth_limit(100),
         )

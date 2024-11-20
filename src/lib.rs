@@ -14,13 +14,17 @@
 //!
 //! See [`TrafficShaper`] for more information.
 
+#[macro_use]
+extern crate tracing;
+
+mod item;
 mod latency;
-mod payload;
+mod settings;
+mod sink;
 mod stream;
 
+pub use item::ChokeItem;
 pub use latency::*;
-pub use payload::ChokeItem;
-pub use stream::{
-    ChokeStream,
-    ChokeStreamSettings,
-};
+pub use settings::ChokeSettings;
+pub use sink::ChokeSink;
+pub use stream::ChokeStream;

@@ -5,7 +5,7 @@ use bytes::{
 use rand::Rng;
 
 /// A trait for payloads that can be used with the TrafficShaper.
-pub trait ChokeItem: Unpin + Send + Sync + 'static + Sized {
+pub trait ChokeItem: Unpin + Sized + 'static {
     fn byte_len(&self) -> usize;
 
     fn corrupt(&mut self);

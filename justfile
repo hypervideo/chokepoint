@@ -1,9 +1,14 @@
 default:
     just --list
 
-example:
-    cargo run --release --example simple
+example-stream:
+    cargo run --release --example stream
 
-test:
+example-sink:
+    cargo run --release --example sink
+
+examples: example-stream example-sink
+
+test: && examples
     cargo nextest run
     cargo test --doc

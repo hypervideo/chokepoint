@@ -1,4 +1,7 @@
-use crate::payload::ChokeItem;
+use crate::{
+    item::ChokeItem,
+    ChokeSettings,
+};
 use burster::{
     Limiter,
     SlidingWindowCounter,
@@ -8,11 +11,6 @@ use futures::{
     StreamExt,
 };
 use rand::Rng;
-#[cfg(not(target_arch = "wasm32"))]
-use std::time::{
-    SystemTime,
-    UNIX_EPOCH,
-};
 use std::{
     collections::VecDeque,
     pin::Pin,
@@ -32,10 +30,6 @@ use tokio::time::{
 use tokio_util::time::DelayQueue;
 #[cfg(target_arch = "wasm32")]
 use wasmtimer::{
-    std::{
-        SystemTime,
-        UNIX_EPOCH,
-    },
     tokio::{
         interval,
         Interval,
@@ -43,68 +37,11 @@ use wasmtimer::{
     tokio_util::DelayQueue,
 };
 
-/// Settings for1
-#[derive(Default)]
-#[allow(clippy::type_complexity)]
-pub struct ChokeStreamSettings {
-    latency_distribution: Option<Option<Box<dyn FnMut() -> Option<Duration> + Send + Sync>>>,
-    drop_probability: Option<f64>,
-    corrupt_probability: Option<f64>,
-    duplicate_probability: Option<f64>,
-    bandwidth_limiter: Option<Option<SlidingWindowCounter<fn() -> Duration>>>,
-    settings_rx: Option<mpsc::Receiver<ChokeStreamSettings>>,
-}
-
-impl ChokeStreamSettings {
-    pub fn settings_updater(&mut self) -> mpsc::Sender<ChokeStreamSettings> {
-        let (settings_tx, settings_rx) = mpsc::channel(1);
-        self.settings_rx = Some(settings_rx);
-        settings_tx
-    }
-
-    /// Set the bandwidth limit in bytes per second.
-    pub fn set_bandwidth_limit(mut self, bytes_per_seconds: usize) -> Self {
-        self.bandwidth_limiter = Some(Some(SlidingWindowCounter::new_with_time_provider(
-            bytes_per_seconds as _,
-            1000, /* ms */
-            || SystemTime::now().duration_since(UNIX_EPOCH).unwrap(),
-        )));
-        self
-    }
-
-    /// Set the latency distribution function.
-    pub fn set_latency_distribution<F>(mut self, f: F) -> Self
-    where
-        F: FnMut() -> Option<Duration> + Send + Sync + 'static,
-    {
-        self.latency_distribution = Some(Some(Box::new(f)));
-        self
-    }
-
-    /// Set the probability of packet drop (0.0 to 1.0).
-    pub fn set_drop_probability(mut self, probability: f64) -> Self {
-        self.drop_probability = Some(probability);
-        self
-    }
-
-    /// Set the probability of packet corruption (0.0 to 1.0).
-    pub fn set_corrupt_probability(mut self, probability: f64) -> Self {
-        self.corrupt_probability = Some(probability);
-        self
-    }
-
-    /// Set the probability of packet duplication (0.0 to 1.0).
-    pub fn set_duplicate_probability(mut self, probability: f64) -> Self {
-        self.duplicate_probability = Some(probability);
-        self
-    }
-}
-
 /// A traffic shaper that can simulate various network conditions.
 ///
 /// Example:
 /// ```rust
-/// # use chokepoint::{normal_distribution, ChokeStream, ChokeStreamSettings};
+/// # use chokepoint::{normal_distribution, ChokeStream, ChokeSettings};
 /// # use bytes::Bytes;
 /// # use chrono::{prelude::*, Duration};
 /// # use futures::stream::StreamExt;
@@ -118,7 +55,7 @@ impl ChokeStreamSettings {
 ///
 /// let mut traffic_shaper = ChokeStream::new(
 ///     Box::new(UnboundedReceiverStream::new(rx)),
-///     ChokeStreamSettings::default()
+///     ChokeSettings::default()
 ///         // Set the latency distribution in milliseconds
 ///         .set_latency_distribution(normal_distribution(
 ///             10.0,  /* mean */
@@ -163,11 +100,11 @@ pub struct ChokeStream<T> {
     duplicate_probability: f64,
     bandwidth_limiter: Option<SlidingWindowCounter<fn() -> Duration>>,
     bandwidth_timer: Option<Interval>,
-    settings_rx: Option<mpsc::Receiver<ChokeStreamSettings>>,
+    settings_rx: Option<mpsc::Receiver<ChokeSettings>>,
 }
 
 impl<T> ChokeStream<T> {
-    pub fn new(stream: Box<dyn Stream<Item = T> + Unpin>, settings: ChokeStreamSettings) -> Self {
+    pub fn new(stream: Box<dyn Stream<Item = T> + Unpin>, settings: ChokeSettings) -> Self {
         let mut stream = ChokeStream {
             stream,
             queue: VecDeque::new(),
@@ -184,7 +121,7 @@ impl<T> ChokeStream<T> {
         stream
     }
 
-    pub fn apply_settings(&mut self, settings: ChokeStreamSettings) {
+    pub fn apply_settings(&mut self, settings: ChokeSettings) {
         if let Some(settings_rx) = settings.settings_rx {
             self.settings_rx = Some(settings_rx);
         }
@@ -206,6 +143,14 @@ impl<T> ChokeStream<T> {
                 self.bandwidth_timer = Some(interval(Duration::from_millis(100)));
             }
         }
+    }
+
+    pub(crate) fn pending(&self) -> bool {
+        !self.queue.is_empty() || !self.delay_queue.is_empty()
+    }
+
+    pub(crate) fn pending_immediate(&self) -> bool {
+        !self.queue.is_empty()
     }
 }
 
@@ -233,6 +178,7 @@ where
                 (Poll::Ready(Some(mut packet)), _, _) => {
                     // Simulate packet loss
                     if rng.gen::<f64>() < this.drop_probability {
+                        trace!("dropped");
                         continue;
                     }
 
@@ -247,14 +193,16 @@ where
                     // Simulate packet duplication
                     if rng.gen::<f64>() < this.duplicate_probability {
                         if let Some(packet) = packet.duplicate() {
+                            trace!("duplicated");
                             this.queue.push_back(packet);
                         } else {
-                            tracing::warn!("Failed to duplicate packet");
+                            warn!("Failed to duplicate packet");
                         }
                     }
 
                     // Insert the packet into the DelayQueue with the calculated delay
                     if let Some(delay) = delay {
+                        debug!("delayed by {:?}", delay);
                         this.delay_queue.insert(packet, delay);
                     } else {
                         this.queue.push_back(packet);
@@ -281,12 +229,14 @@ where
             // Simulate bandwidth limitation
             if let (Some(limiter), Some(timer)) = (&mut this.bandwidth_limiter, &mut this.bandwidth_timer) {
                 if limiter.try_consume(packet.byte_len() as _).is_err() {
+                    trace!("bandwidth limit exceeded");
                     // If the packet cannot be sent due to bandwidth limitation, reinsert it into the queue
                     this.queue.push_front(packet);
                     timer.reset(); // to wake up later without busy waking
                     return Poll::Pending;
                 }
             }
+
             return Poll::Ready(Some(packet));
         }
 
