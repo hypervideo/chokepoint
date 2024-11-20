@@ -21,6 +21,7 @@ pub struct ChokeSettings {
     pub(crate) corrupt_probability: Option<f64>,
     pub(crate) duplicate_probability: Option<f64>,
     pub(crate) bandwidth_limiter: Option<Option<SlidingWindowCounter<fn() -> Duration>>>,
+    pub(crate) backpressure: Option<bool>,
     pub(crate) settings_rx: Option<mpsc::Receiver<ChokeSettings>>,
 }
 
@@ -65,6 +66,13 @@ impl ChokeSettings {
     /// Set the probability of packet duplication (0.0 to 1.0).
     pub fn set_duplicate_probability(mut self, probability: f64) -> Self {
         self.duplicate_probability = Some(probability);
+        self
+    }
+
+    /// Enable backpressure. Will not consume from inner stream until the choke queues are empty. Otherwise will consume
+    /// from inner stream as fast as possible.
+    pub fn set_backpressure(mut self, enable: Option<bool>) -> Self {
+        self.backpressure = enable;
         self
     }
 }

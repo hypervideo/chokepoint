@@ -28,6 +28,7 @@
             (rustfmt.override { asNightly = true; })
             cargo-nextest
             cargo-readme
+            graph-cli
           ];
 
           RUST_BACKTRACE = "1";

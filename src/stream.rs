@@ -1,5 +1,12 @@
 use crate::{
     item::ChokeItem,
+    time::{
+        tokio_time::{
+            interval,
+            Interval,
+        },
+        tokio_util::DelayQueue,
+    },
     ChokeSettings,
 };
 use burster::{
@@ -21,21 +28,6 @@ use std::{
     time::Duration,
 };
 use tokio::sync::mpsc;
-#[cfg(not(target_arch = "wasm32"))]
-use tokio::time::{
-    interval,
-    Interval,
-};
-#[cfg(not(target_arch = "wasm32"))]
-use tokio_util::time::DelayQueue;
-#[cfg(target_arch = "wasm32")]
-use wasmtimer::{
-    tokio::{
-        interval,
-        Interval,
-    },
-    tokio_util::DelayQueue,
-};
 
 /// A traffic shaper that can simulate various network conditions.
 ///
@@ -100,6 +92,7 @@ pub struct ChokeStream<T> {
     duplicate_probability: f64,
     bandwidth_limiter: Option<SlidingWindowCounter<fn() -> Duration>>,
     bandwidth_timer: Option<Interval>,
+    backpressure: bool,
     settings_rx: Option<mpsc::Receiver<ChokeSettings>>,
 }
 
@@ -115,6 +108,7 @@ impl<T> ChokeStream<T> {
             duplicate_probability: 0.0,
             bandwidth_limiter: None,
             bandwidth_timer: None,
+            backpressure: false,
             settings_rx: None,
         };
         stream.apply_settings(settings);
@@ -137,6 +131,9 @@ impl<T> ChokeStream<T> {
         if let Some(duplicate_probability) = settings.duplicate_probability {
             self.duplicate_probability = duplicate_probability;
         }
+        if let Some(backpressure) = settings.backpressure {
+            self.backpressure = backpressure;
+        }
         if let Some(bandwidth_limiter) = settings.bandwidth_limiter {
             self.bandwidth_limiter = bandwidth_limiter;
             if self.bandwidth_limiter.is_some() {
@@ -147,10 +144,6 @@ impl<T> ChokeStream<T> {
 
     pub(crate) fn pending(&self) -> bool {
         !self.queue.is_empty() || !self.delay_queue.is_empty()
-    }
-
-    pub(crate) fn pending_immediate(&self) -> bool {
-        !self.queue.is_empty()
     }
 }
 
@@ -165,63 +158,64 @@ where
         let mut rng = rand::thread_rng();
 
         if let Some(new_settings) = this.settings_rx.as_mut().and_then(|s| s.try_recv().ok()) {
+            debug!("settings changed");
             this.apply_settings(new_settings);
         }
 
+        this.bandwidth_timer.as_mut().map(|timer| timer.poll_tick(cx));
+
         // First, take packets from the receiver and process them.
-        loop {
-            match (
-                this.stream.poll_next_unpin(cx),
-                this.delay_queue.poll_expired(cx),
-                this.bandwidth_timer.as_mut().map(|timer| timer.poll_tick(cx)),
-            ) {
-                (Poll::Ready(Some(mut packet)), _, _) => {
-                    // Simulate packet loss
-                    if rng.gen::<f64>() < this.drop_probability {
-                        trace!("dropped");
-                        continue;
-                    }
+        if !this.backpressure || !this.pending() {
+            loop {
+                match this.stream.poll_next_unpin(cx) {
+                    Poll::Ready(Some(mut packet)) => {
+                        // Simulate packet loss
+                        if rng.gen::<f64>() < this.drop_probability {
+                            trace!("dropped");
+                            continue;
+                        }
 
-                    // Simulate packet corruption
-                    if rng.gen::<f64>() < this.corrupt_probability {
-                        packet.corrupt();
-                    }
+                        // Simulate packet corruption
+                        if rng.gen::<f64>() < this.corrupt_probability {
+                            packet.corrupt();
+                        }
 
-                    // Simulate latency using the user-defined distribution
-                    let delay = this.latency_distribution.as_mut().and_then(|latency_fn| latency_fn());
+                        // Simulate latency using the user-defined distribution
+                        let delay = this.latency_distribution.as_mut().and_then(|latency_fn| latency_fn());
 
-                    // Simulate packet duplication
-                    if rng.gen::<f64>() < this.duplicate_probability {
-                        if let Some(packet) = packet.duplicate() {
-                            trace!("duplicated");
-                            this.queue.push_back(packet);
+                        // Simulate packet duplication
+                        if rng.gen::<f64>() < this.duplicate_probability {
+                            if let Some(packet) = packet.duplicate() {
+                                trace!("duplicated");
+                                this.queue.push_back(packet);
+                            } else {
+                                warn!("Failed to duplicate packet");
+                            }
+                        }
+
+                        // Insert the packet into the DelayQueue with the calculated delay
+                        if let Some(delay) = delay {
+                            debug!("delayed by {:?}", delay);
+                            this.delay_queue.insert(packet, delay);
                         } else {
-                            warn!("Failed to duplicate packet");
+                            this.queue.push_back(packet);
                         }
                     }
 
-                    // Insert the packet into the DelayQueue with the calculated delay
-                    if let Some(delay) = delay {
-                        debug!("delayed by {:?}", delay);
-                        this.delay_queue.insert(packet, delay);
-                    } else {
-                        this.queue.push_back(packet);
+                    Poll::Ready(None) if this.delay_queue.is_empty() && this.queue.is_empty() => {
+                        return Poll::Ready(None);
+                    }
+
+                    Poll::Ready(None) | Poll::Pending => {
+                        // No more packets to read at the moment
+                        break;
                     }
                 }
-
-                (_, Poll::Ready(Some(expired)), _) => {
-                    this.queue.push_back(expired.into_inner());
-                }
-
-                (Poll::Ready(None), _, _) if this.delay_queue.is_empty() && this.queue.is_empty() => {
-                    return Poll::Ready(None);
-                }
-
-                _ => {
-                    // No more packets to read at the moment
-                    break;
-                }
             }
+        }
+
+        while let Poll::Ready(Some(expired)) = this.delay_queue.poll_expired(cx) {
+            this.queue.push_back(expired.into_inner());
         }
 
         // Retrieve packets from the normal or delay queue

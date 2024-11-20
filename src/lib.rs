@@ -23,6 +23,10 @@ mod latency;
 mod settings;
 mod sink;
 mod stream;
+pub(crate) mod time;
+
+#[cfg(any(test, debug_assertions))]
+pub mod test_sink;
 
 pub use item::ChokeItem;
 pub use latency::*;

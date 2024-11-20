@@ -6,6 +6,7 @@
 - Implement `ChokeItem` for `Result` and `Option`.
 - Allow updating the `ChokeStreamSettings` dynamically.
 - `ChokeSink` to wrap a `future::Sink`.
+- optional backpressure to wait with consuming the next item until the previous one has been processed.
 
 ### Changed
 - Rename types.
