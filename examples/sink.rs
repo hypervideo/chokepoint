@@ -18,7 +18,7 @@ async fn main() {
         )
         .init();
 
-    // run().await;
+    run().await;
     run2().await;
 }
 
@@ -48,10 +48,14 @@ async fn run2() {
     );
 
     for i in 0..10usize {
+        println!("[{i}] emitting");
         sink.send(TestPayload::new(i)).await.unwrap();
+        println!("[{i}] emitting done");
     }
 
+    println!("closing sink");
     sink.close().await.unwrap();
+    println!("sink closed");
 
     let received = sink
         .into_inner()

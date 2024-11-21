@@ -18,9 +18,11 @@ use std::{
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
+const VERBOSE: bool = false;
+
 /// A [`futures::Sink`] that uses an underlaying [`ChokeStream`] to control how items are forwarded to the inner sink.
 #[allow(clippy::type_complexity)]
-#[pin_project::pin_project]
+#[pin_project]
 pub struct ChokeSink<Si, T>
 where
     Si: Sink<T> + Unpin,
@@ -62,7 +64,9 @@ where
     type Error = Si::Error;
 
     fn poll_ready(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        debug!(backpressure = %self.backpressure, pending = %self.choke_stream.pending(), "poll_ready");
+        if VERBOSE {
+            debug!(backpressure = %self.backpressure, pending = %self.choke_stream.pending(), "poll_ready");
+        }
         if self.backpressure && self.choke_stream.pending() {
             return Poll::Pending;
         }
@@ -70,16 +74,22 @@ where
     }
 
     fn start_send(self: Pin<&mut Self>, item: T) -> Result<(), Self::Error> {
-        // debug!(pending = %self.choke_stream.pending(), "start_send");
+        if VERBOSE {
+            debug!(pending = %self.choke_stream.pending(), "start_send");
+        }
         self.sender.send(item).expect("the stream owns the receiver");
         Ok(())
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        // debug!(pending = %self.choke_stream.pending(), "poll_flush");
+        if VERBOSE {
+            debug!(pending = %self.choke_stream.pending(), "poll_flush");
+        }
         match self.choke_stream.poll_next_unpin(cx) {
             Poll::Ready(Some(item)) => {
-                // debug!(pending = %self.choke_stream.pending(), "poll_flush: got item");
+                if VERBOSE {
+                    debug!(pending = %self.choke_stream.pending(), "poll_flush: got item");
+                }
                 match self.sink.poll_ready_unpin(cx) {
                     Poll::Ready(Ok(())) => match self.sink.start_send_unpin(item) {
                         Ok(()) => self.sink.poll_flush_unpin(cx),
@@ -91,13 +101,21 @@ where
             Poll::Ready(None) => self.sink.poll_flush_unpin(cx),
             Poll::Pending => {
                 cx.waker().wake_by_ref();
-                Poll::Pending
+                if self.choke_stream.has_dropped_item() {
+                    self.choke_stream.reset_dropped_item();
+                    Poll::Ready(Ok(()))
+                } else {
+                    Poll::Pending
+                }
             }
         }
     }
 
     fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        // debug!(pending = %self.choke_stream.pending(), "poll_close");
+        if VERBOSE {
+            debug!(pending = %self.choke_stream.pending(), "poll_close");
+        }
+
         if self.choke_stream.pending() {
             self.poll_flush(cx)
         } else {

@@ -18,6 +18,9 @@
 #[macro_use]
 extern crate tracing;
 
+#[macro_use]
+extern crate pin_project;
+
 mod item;
 mod latency;
 mod settings;

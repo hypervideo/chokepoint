@@ -14,7 +14,6 @@ use futures::{
     stream::StreamExt,
     SinkExt,
 };
-use std::time::UNIX_EPOCH;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
@@ -109,10 +108,6 @@ async fn sink() {
     let items = sink.into_inner().received.into_inner().into_iter().collect::<Vec<_>>();
 
     for (received, TestPayload { created, i }) in items {
-        let ts = created.duration_since(UNIX_EPOCH).unwrap().as_millis() as i64;
-        let created = DateTime::from_timestamp_millis(ts).unwrap();
-        let ts = received.duration_since(UNIX_EPOCH).unwrap().as_millis() as i64;
-        let received = DateTime::from_timestamp_millis(ts).unwrap();
         let delta = received - created;
         println!(
             "{i},{},{},{}",

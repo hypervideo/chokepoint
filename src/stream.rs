@@ -82,6 +82,7 @@ use tokio::sync::mpsc;
 /// }
 /// # }
 /// ```
+#[pin_project]
 pub struct ChokeStream<T> {
     stream: Box<dyn Stream<Item = T> + Unpin>,
     queue: VecDeque<T>,
@@ -94,6 +95,7 @@ pub struct ChokeStream<T> {
     bandwidth_timer: Option<Interval>,
     backpressure: bool,
     settings_rx: Option<mpsc::Receiver<ChokeSettings>>,
+    has_dropped_item: bool,
 }
 
 impl<T> ChokeStream<T> {
@@ -110,6 +112,7 @@ impl<T> ChokeStream<T> {
             bandwidth_timer: None,
             backpressure: false,
             settings_rx: None,
+            has_dropped_item: false,
         };
         stream.apply_settings(settings);
         stream
@@ -145,6 +148,14 @@ impl<T> ChokeStream<T> {
     pub(crate) fn pending(&self) -> bool {
         !self.queue.is_empty() || !self.delay_queue.is_empty()
     }
+
+    pub(crate) fn has_dropped_item(&self) -> bool {
+        self.has_dropped_item
+    }
+
+    pub(crate) fn reset_dropped_item(&mut self) {
+        self.has_dropped_item = false;
+    }
 }
 
 impl<T> Stream for ChokeStream<T>
@@ -172,6 +183,7 @@ where
                         // Simulate packet loss
                         if rng.gen::<f64>() < this.drop_probability {
                             trace!("dropped");
+                            this.has_dropped_item = true;
                             continue;
                         }
 

@@ -1,7 +1,4 @@
-use crate::{
-    time::SystemTime,
-    ChokeItem,
-};
+use crate::ChokeItem;
 use chrono::prelude::*;
 use futures::Sink;
 use std::{
@@ -47,7 +44,7 @@ impl ChokeItem for TestPayload {
 
 #[derive(Default)]
 pub struct TestSink {
-    pub received: std::cell::RefCell<Vec<(SystemTime, TestPayload)>>,
+    pub received: std::cell::RefCell<Vec<(DateTime<Utc>, TestPayload)>>,
 }
 
 impl Sink<TestPayload> for TestSink {
@@ -60,7 +57,7 @@ impl Sink<TestPayload> for TestSink {
 
     fn start_send(self: Pin<&mut Self>, item: TestPayload) -> Result<(), Self::Error> {
         trace!("[{item}] received");
-        self.received.borrow_mut().push((SystemTime::now(), item));
+        self.received.borrow_mut().push((Utc::now(), item));
         Ok(())
     }
 
