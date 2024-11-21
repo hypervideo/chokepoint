@@ -44,7 +44,7 @@ async fn run2() {
         TestSink::default(),
         ChokeSettings::default()
             // .set_backpressure(Some(true))
-            .set_drop_probability(0.5),
+            .set_drop_probability(Some(0.5)),
     );
 
     for i in 0..10usize {

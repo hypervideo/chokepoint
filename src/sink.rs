@@ -185,7 +185,10 @@ mod tests {
 
     #[tokio::test]
     async fn sink_with_a_hole() {
-        let mut sink = ChokeSink::new(TestSink::default(), ChokeSettings::default().set_drop_probability(0.5));
+        let mut sink = ChokeSink::new(
+            TestSink::default(),
+            ChokeSettings::default().set_drop_probability(Some(0.5)),
+        );
 
         for i in 0..10usize {
             sink.send(TestPayload::new(i)).await.unwrap();

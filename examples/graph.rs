@@ -56,8 +56,8 @@ async fn stream() {
         ChokeSettings::default()
             .set_backpressure(Some(false))
             .set_latency_distribution(chokepoint::normal_distribution(25.0, 15.0, 100.0))
-            .set_bandwidth_limit(250)
-            .set_corrupt_probability(0.0),
+            .set_bandwidth_limit(Some(250))
+            .set_corrupt_probability(Some(0.0)),
     );
 
     tokio::spawn(async move {

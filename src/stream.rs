@@ -55,9 +55,9 @@ use tokio::sync::mpsc;
 ///             100.0, /* max */
 ///         ))
 ///         // Set other parameters as needed
-///         .set_drop_probability(0.0)
-///         .set_corrupt_probability(0.0)
-///         .set_bandwidth_limit(100 /* bytes per second */),
+///         .set_drop_probability(Some(0.0))
+///         .set_corrupt_probability(Some(0.0))
+///         .set_bandwidth_limit(Some(100 /* bytes per second */)),
 /// );
 ///
 /// // Spawn a task to send packets into the ChokeStream
