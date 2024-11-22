@@ -19,7 +19,7 @@ async fn main() {
         .init();
 
     run().await;
-    run2().await;
+    // run2().await;
 }
 
 async fn run() {
@@ -39,31 +39,30 @@ async fn run() {
     println!("received: {:?}", received);
 }
 
+#[allow(dead_code)]
 async fn run2() {
     let mut sink = ChokeSink::new(
         TestSink::default(),
         ChokeSettings::default()
-            // .set_backpressure(Some(true))
-            .set_drop_probability(Some(0.5)),
+            .set_latency_distribution(normal_distribution(5.0, 10.0, 100.0))
+            .set_backpressure(Some(false)),
     );
 
     for i in 0..10usize {
-        println!("[{i}] emitting");
         sink.send(TestPayload::new(i)).await.unwrap();
-        println!("[{i}] emitting done");
     }
 
-    println!("closing sink");
     sink.close().await.unwrap();
-    println!("sink closed");
 
-    let received = sink
+    let mut received = sink
         .into_inner()
         .received
         .into_inner()
         .into_iter()
         .map(|(_, TestPayload { i, .. })| i)
         .collect::<Vec<_>>();
+    received.sort();
 
-    assert!(received.len() < 10);
+    assert_eq!(received.len(), 10, "{:?}", received);
+    assert_eq!(received, (0..10).collect::<Vec<_>>(), "{:?}", received);
 }

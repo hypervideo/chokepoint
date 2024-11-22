@@ -29,6 +29,8 @@ use std::{
 };
 use tokio::sync::mpsc;
 
+const VERBOSE: bool = true;
+
 /// A traffic shaper that can simulate various network conditions.
 ///
 /// Example:
@@ -92,14 +94,20 @@ pub struct ChokeStream<T> {
     corrupt_probability: f64,
     duplicate_probability: f64,
     bandwidth_limiter: Option<SlidingWindowCounter<fn() -> Duration>>,
-    bandwidth_timer: Option<Interval>,
+    timer: Interval,
     backpressure: bool,
     settings_rx: Option<mpsc::Receiver<ChokeSettings>>,
     has_dropped_item: bool,
+    total_packets: usize,
+    packets_per_second: usize,
+    packets_per_second_timer: Interval,
 }
 
 impl<T> ChokeStream<T> {
     pub fn new(stream: Box<dyn Stream<Item = T> + Unpin>, settings: ChokeSettings) -> Self {
+        if VERBOSE {
+            debug!(?settings, "creating new ChokeStream");
+        }
         let mut stream = ChokeStream {
             stream,
             queue: VecDeque::new(),
@@ -109,16 +117,21 @@ impl<T> ChokeStream<T> {
             corrupt_probability: 0.0,
             duplicate_probability: 0.0,
             bandwidth_limiter: None,
-            bandwidth_timer: None,
+            timer: interval(Duration::from_millis(100)),
             backpressure: false,
             settings_rx: None,
             has_dropped_item: false,
+            total_packets: 0,
+            packets_per_second: 0,
+            packets_per_second_timer: interval(Duration::from_secs(1)),
         };
         stream.apply_settings(settings);
         stream
     }
 
     pub fn apply_settings(&mut self, settings: ChokeSettings) {
+        debug!(?settings, "applying settings");
+
         if let Some(settings_rx) = settings.settings_rx {
             self.settings_rx = Some(settings_rx);
         }
@@ -139,9 +152,6 @@ impl<T> ChokeStream<T> {
         }
         if let Some(bandwidth_limiter) = settings.bandwidth_limiter {
             self.bandwidth_limiter = bandwidth_limiter;
-            if self.bandwidth_limiter.is_some() {
-                self.bandwidth_timer = Some(interval(Duration::from_millis(100)));
-            }
         }
     }
 
@@ -165,24 +175,46 @@ where
     type Item = T;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if VERBOSE {
+            debug!(
+                queue = self.queue.len(),
+                delay_queue = self.delay_queue.len(),
+                "poll_next"
+            );
+        }
+
         let this = self.get_mut();
         let mut rng = rand::thread_rng();
 
         if let Some(new_settings) = this.settings_rx.as_mut().and_then(|s| s.try_recv().ok()) {
-            debug!("settings changed");
+            debug!(?new_settings, "settings changed");
             this.apply_settings(new_settings);
         }
 
-        this.bandwidth_timer.as_mut().map(|timer| timer.poll_tick(cx));
+        this.total_packets += 1;
+        this.packets_per_second += 1;
+
+        if this.packets_per_second_timer.poll_tick(cx).is_ready() {
+            this.packets_per_second_timer.reset();
+            debug!(queue = this.queue.len(), delay_queue = this.delay_queue.len(), packets_per_second = %this.packets_per_second, total_packets = %this.total_packets, "packets per second");
+            this.packets_per_second = 0;
+        }
 
         // First, take packets from the receiver and process them.
         if !this.backpressure || !this.pending() {
+            if VERBOSE {
+                debug!("waiting for packets from inner stream");
+            }
             loop {
                 match this.stream.poll_next_unpin(cx) {
                     Poll::Ready(Some(mut packet)) => {
+                        if VERBOSE {
+                            debug!(bytes = %packet.byte_len(), "received packet");
+                        }
+
                         // Simulate packet loss
                         if rng.gen::<f64>() < this.drop_probability {
-                            trace!("dropped");
+                            debug!("dropped packet");
                             this.has_dropped_item = true;
                             continue;
                         }
@@ -198,7 +230,7 @@ where
                         // Simulate packet duplication
                         if rng.gen::<f64>() < this.duplicate_probability {
                             if let Some(packet) = packet.duplicate() {
-                                trace!("duplicated");
+                                debug!("duplicated packet");
                                 this.queue.push_back(packet);
                             } else {
                                 warn!("Failed to duplicate packet");
@@ -207,7 +239,9 @@ where
 
                         // Insert the packet into the DelayQueue with the calculated delay
                         if let Some(delay) = delay {
-                            debug!("delayed by {:?}", delay);
+                            if VERBOSE {
+                                debug!(?delay, "delayed");
+                            }
                             this.delay_queue.insert(packet, delay);
                         } else {
                             this.queue.push_back(packet);
@@ -227,26 +261,55 @@ where
         }
 
         while let Poll::Ready(Some(expired)) = this.delay_queue.poll_expired(cx) {
+            if VERBOSE {
+                debug!("requeing delayed packet");
+            }
             this.queue.push_back(expired.into_inner());
         }
 
         // Retrieve packets from the normal or delay queue
+        if VERBOSE {
+            debug!(pending = this.queue.len(), "retrieving packet");
+        }
         if let Some(packet) = this.queue.pop_front() {
-            // Simulate bandwidth limitation
-            if let (Some(limiter), Some(timer)) = (&mut this.bandwidth_limiter, &mut this.bandwidth_timer) {
-                if limiter.try_consume(packet.byte_len() as _).is_err() {
-                    trace!("bandwidth limit exceeded");
-                    // If the packet cannot be sent due to bandwidth limitation, reinsert it into the queue
-                    this.queue.push_front(packet);
-                    timer.reset(); // to wake up later without busy waking
-                    return Poll::Pending;
-                }
-            }
+            // debug!(pending = this.queue.len(), "packet from queue");
+            // Simulate bandwidth limita
 
-            return Poll::Ready(Some(packet));
+            if this
+                .bandwidth_limiter
+                .as_mut()
+                .map_or(true, |l| l.try_consume(packet.byte_len() as _).is_ok())
+            {
+                if VERBOSE {
+                    debug!("emitting packet");
+                }
+                return Poll::Ready(Some(packet));
+            } else {
+                warn!("bandwidth limit exceeded");
+                // If the packet cannot be sent due to bandwidth limitation, reinsert it into the queue
+                this.queue.push_front(packet);
+                // return this.stream.poll_next_unpin(cx);
+                // cx.waker().wake_by_ref();
+            }
         }
 
-        Poll::Pending
+        if VERBOSE {
+            debug!(
+                queue = this.queue.len(),
+                delay_queue = this.delay_queue.len(),
+                "Poll::Pending"
+            );
+        }
+
+        if this.timer.poll_tick(cx).is_ready() {
+            this.timer.reset();
+        }
+
+        if this.pending() {
+            Poll::Pending
+        } else {
+            this.stream.poll_next_unpin(cx)
+        }
     }
 }
 

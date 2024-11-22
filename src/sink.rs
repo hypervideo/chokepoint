@@ -33,6 +33,7 @@ where
     choke_stream: ChokeStream<T>,
     sender: mpsc::UnboundedSender<T>,
     backpressure: bool,
+    closing: bool,
 }
 
 impl<Si, T> ChokeSink<Si, T>
@@ -48,6 +49,7 @@ where
             sender: tx,
             backpressure: settings.backpressure.unwrap_or_default(),
             choke_stream: ChokeStream::new(stream, settings),
+            closing: false,
         }
     }
 
@@ -85,27 +87,46 @@ where
         if VERBOSE {
             debug!(pending = %self.choke_stream.pending(), "poll_flush");
         }
+
+        // if let Poll::Ready(Err(err)) = self.sink.poll_flush_unpin(cx) {
+        //     error!("underlaying sink errored");
+        //     return Poll::Ready(Err(err));
+        // }
+
         match self.choke_stream.poll_next_unpin(cx) {
             Poll::Ready(Some(item)) => {
                 if VERBOSE {
                     debug!(pending = %self.choke_stream.pending(), "poll_flush: got item");
                 }
                 match self.sink.poll_ready_unpin(cx) {
-                    Poll::Ready(Ok(())) => match self.sink.start_send_unpin(item) {
-                        Ok(()) => self.sink.poll_flush_unpin(cx),
-                        Err(err) => Poll::Ready(Err(err)),
-                    },
-                    not_ready => not_ready,
+                    Poll::Ready(Ok(())) => {
+                        if VERBOSE {
+                            debug!("underlaying sink is ready, sending item");
+                        }
+                        match self.sink.start_send_unpin(item) {
+                            Ok(()) => self.sink.poll_flush_unpin(cx),
+                            Err(err) => Poll::Ready(Err(err)),
+                        }
+                    }
+                    Poll::Ready(Err(err)) => {
+                        error!("underlaying sink errored");
+                        Poll::Ready(Err(err))
+                    }
+                    Poll::Pending => {
+                        if VERBOSE {
+                            debug!("underlaying sink is pending");
+                        }
+                        Poll::Pending
+                    }
                 }
             }
             Poll::Ready(None) => self.sink.poll_flush_unpin(cx),
             Poll::Pending => {
-                cx.waker().wake_by_ref();
                 if self.choke_stream.has_dropped_item() {
                     self.choke_stream.reset_dropped_item();
                     Poll::Ready(Ok(()))
                 } else {
-                    Poll::Pending
+                    self.sink.poll_flush_unpin(cx)
                 }
             }
         }
@@ -116,8 +137,13 @@ where
             debug!(pending = %self.choke_stream.pending(), "poll_close");
         }
 
+        self.closing = true;
+
         if self.choke_stream.pending() {
-            self.poll_flush(cx)
+            if let Poll::Ready(Err(err)) = self.poll_flush(cx) {
+                return Poll::Ready(Err(err));
+            };
+            Poll::Pending
         } else {
             self.sink.poll_close_unpin(cx)
         }
@@ -161,7 +187,9 @@ mod tests {
     async fn let_it_sink_in() {
         let mut sink = ChokeSink::new(
             TestSink::default(),
-            ChokeSettings::default().set_latency_distribution(normal_distribution(5.0, 10.0, 100.0)),
+            ChokeSettings::default()
+                .set_latency_distribution(normal_distribution(5.0, 10.0, 100.0))
+                .set_backpressure(Some(false)),
         );
 
         for i in 0..10usize {
@@ -179,8 +207,8 @@ mod tests {
             .collect::<Vec<_>>();
         received.sort();
 
-        assert_eq!(received.len(), 10);
-        assert_eq!(received, (0..10).collect::<Vec<_>>());
+        assert_eq!(received.len(), 10, "{:?}", received);
+        assert_eq!(received, (0..10).collect::<Vec<_>>(), "{:?}", received);
     }
 
     #[tokio::test]

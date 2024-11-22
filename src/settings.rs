@@ -25,6 +25,33 @@ pub struct ChokeSettings {
     pub(crate) settings_rx: Option<mpsc::Receiver<ChokeSettings>>,
 }
 
+impl std::fmt::Debug for ChokeSettings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChokeSettings")
+            .field(
+                "latency_distribution",
+                if self.latency_distribution.is_some() {
+                    &"Some"
+                } else {
+                    &"None"
+                },
+            )
+            .field("drop_probability", &self.drop_probability)
+            .field("corrupt_probability", &self.corrupt_probability)
+            .field("duplicate_probability", &self.duplicate_probability)
+            .field(
+                "bandwidth_limiter",
+                if self.bandwidth_limiter.is_some() {
+                    &"Some"
+                } else {
+                    &"None"
+                },
+            )
+            .field("backpressure", &self.backpressure)
+            .finish()
+    }
+}
+
 impl ChokeSettings {
     pub fn with_updater(settings_rx: mpsc::Receiver<ChokeSettings>) -> Self {
         Self {
