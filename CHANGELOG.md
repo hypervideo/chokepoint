@@ -10,3 +10,4 @@
 
 ### Changed
 - Rename types.
+- Bug fixes.
