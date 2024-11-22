@@ -33,7 +33,6 @@ where
     choke_stream: ChokeStream<T>,
     sender: mpsc::UnboundedSender<T>,
     backpressure: bool,
-    closing: bool,
 }
 
 impl<Si, T> ChokeSink<Si, T>
@@ -49,7 +48,6 @@ where
             sender: tx,
             backpressure: settings.backpressure.unwrap_or_default(),
             choke_stream: ChokeStream::new(stream, settings),
-            closing: false,
         }
     }
 
@@ -136,8 +134,6 @@ where
         if VERBOSE {
             debug!(pending = %self.choke_stream.pending(), "poll_close");
         }
-
-        self.closing = true;
 
         if self.choke_stream.pending() {
             if let Poll::Ready(Err(err)) = self.poll_flush(cx) {
