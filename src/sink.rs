@@ -92,21 +92,20 @@ where
                 if VERBOSE {
                     debug!(pending = %self.choke_stream.pending(), "poll_flush: got item");
                 }
-                match self.sink.start_send_unpin(item) {
-                    Ok(()) => self.sink.poll_flush_unpin(cx),
-                    Err(err) => Poll::Ready(Err(err)),
+                if let Err(err) = self.sink.start_send_unpin(item) {
+                    return Poll::Ready(Err(err));
                 }
             }
-            Poll::Ready(None) => Poll::Ready(Ok(())),
             Poll::Pending => {
                 if self.choke_stream.has_dropped_item() {
                     self.choke_stream.reset_dropped_item();
-                    Poll::Ready(Ok(()))
-                } else {
-                    Poll::Pending
+                    return Poll::Ready(Ok(()));
                 }
             }
+            _ => {}
         }
+
+        self.sink.poll_flush_unpin(cx)
     }
 
     fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {

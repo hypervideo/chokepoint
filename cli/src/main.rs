@@ -144,17 +144,35 @@ async fn stream(
     tokio::spawn(async move {
         let packet_size = packet_size.as_u64() as usize;
         let delay = packet_rate.map(|packet_rate| std::time::Duration::from_micros(1_000_000 / packet_rate as u64));
+        debug!("using delay={:?}", delay);
         let now = Utc::now();
-        for i in 0..n {
-            tx.send(TestPayload::new(i, packet_size)).unwrap();
-            if let Some(delay) = delay {
-                tokio::time::sleep(delay).await;
+
+        const CHUNKED: bool = false;
+
+        if CHUNKED {
+            let chunk_size = 10;
+            for chunk in (0..n).collect::<Vec<_>>().chunks(chunk_size) {
+                for i in chunk {
+                    tx.send(TestPayload::new(*i, packet_size)).unwrap();
+                }
+                if let Some(delay) = delay {
+                    tokio::time::sleep(delay * chunk_size as u32).await;
+                }
+            }
+        } else {
+            for i in 0..n {
+                tx.send(TestPayload::new(i, packet_size)).unwrap();
+                if let Some(delay) = delay {
+                    tokio::time::sleep(delay).await;
+                }
             }
         }
+
         debug!(
-            "sent {} packets in {}µs",
+            "sent {} packets in {}µs ({}µs/packet)",
             n,
-            (Utc::now() - now).num_microseconds().unwrap()
+            (Utc::now() - now).num_microseconds().unwrap(),
+            (Utc::now() - now).num_microseconds().unwrap() / n as i64
         );
     });
 
@@ -196,13 +214,39 @@ async fn sink(
             .set_corrupt_probability(Some(0.0)),
     );
 
-    let packet_size = packet_size.as_u64() as usize;
-    let delay = packet_rate.map(|packet_rate| std::time::Duration::from_micros(1_000_000 / packet_rate as u64));
-    for i in 0..n {
-        sink.send(TestPayload::new(i, packet_size)).await.unwrap();
-        if let Some(delay) = delay {
-            tokio::time::sleep(delay).await;
+    {
+        let packet_size = packet_size.as_u64() as usize;
+        let delay = packet_rate.map(|packet_rate| std::time::Duration::from_micros(1_000_000 / packet_rate as u64));
+        debug!("using delay={:?}", delay);
+        let now = Utc::now();
+
+        const CHUNKED: bool = false;
+
+        if CHUNKED {
+            let chunk_size = 10;
+            for chunk in (0..n).collect::<Vec<_>>().chunks(chunk_size) {
+                for i in chunk {
+                    sink.send(TestPayload::new(*i, packet_size)).await.unwrap();
+                }
+                if let Some(delay) = delay {
+                    tokio::time::sleep(delay * chunk_size as u32).await;
+                }
+            }
+        } else {
+            for i in 0..n {
+                sink.send(TestPayload::new(i, packet_size)).await.unwrap();
+                if let Some(delay) = delay {
+                    tokio::time::sleep(delay).await;
+                }
+            }
         }
+
+        debug!(
+            "sent {} packets in {}µs ({}µs/packet)",
+            n,
+            (Utc::now() - now).num_microseconds().unwrap(),
+            (Utc::now() - now).num_microseconds().unwrap() / n as i64
+        );
     }
 
     sink.close().await.unwrap();

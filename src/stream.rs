@@ -33,7 +33,7 @@ use std::{
 };
 use tokio::sync::mpsc;
 
-const VERBOSE: bool = true;
+const VERBOSE: bool = false;
 
 /// A traffic shaper that can simulate various network conditions.
 ///
@@ -103,7 +103,7 @@ pub struct ChokeStream<T> {
     has_dropped_item: bool,
     total_packets: usize,
     packets_per_second: usize,
-    packets_per_second_timer: Interval,
+    debug_timer: Interval,
 }
 
 impl<T> ChokeStream<T> {
@@ -126,7 +126,7 @@ impl<T> ChokeStream<T> {
             has_dropped_item: false,
             total_packets: 0,
             packets_per_second: 0,
-            packets_per_second_timer: interval(Duration::from_secs(1)),
+            debug_timer: interval(Duration::from_secs_f64(2.5)),
         };
         stream.apply_settings(settings);
         stream
@@ -152,6 +152,7 @@ impl<T> ChokeStream<T> {
         }
         if let Some(ordering) = settings.ordering {
             self.ordering = ordering;
+            self.queue = Queue::queue_for_ordering(ordering);
         }
         if let Some(bandwidth_limiter) = settings.bandwidth_limiter {
             self.bandwidth_limiter = bandwidth_limiter;
@@ -366,16 +367,15 @@ where
         }
 
         let this = self.get_mut();
-        let mut rng = rand::thread_rng();
 
         if let Some(new_settings) = this.settings_rx.as_mut().and_then(|s| s.try_recv().ok()) {
             debug!(?new_settings, "settings changed");
             this.apply_settings(new_settings);
         }
 
-        if this.packets_per_second_timer.poll_tick(cx).is_ready() {
-            this.packets_per_second_timer.reset();
-            debug!(queued = this.queue.queued(), delayed = this.queue.delayed(), packets_per_second = %this.packets_per_second, total_packets = %this.total_packets, "packets per second");
+        if this.debug_timer.poll_tick(cx).is_ready() {
+            this.debug_timer.reset();
+            debug!(queued = this.queue.queued(), delayed = this.queue.delayed(), packets_per_second = %this.packets_per_second, total_packets = %this.total_packets, ordering = ?this.ordering, "packets per second");
             this.packets_per_second = 0;
         }
 
@@ -386,6 +386,7 @@ where
             if VERBOSE {
                 debug!("waiting for packets from inner stream");
             }
+            let mut rng = rand::thread_rng();
             loop {
                 match this.stream.poll_next_unpin(cx) {
                     Poll::Ready(Some(mut packet)) => {
@@ -462,9 +463,8 @@ where
                 this.total_packets += 1;
                 this.packets_per_second += 1;
 
-                if this.pending() {
-                    cx.waker().wake_by_ref();
-                }
+                // Poll the stream again immediately for processing the next packet
+                cx.waker().wake_by_ref();
 
                 return Poll::Ready(Some(packet));
             } else {
