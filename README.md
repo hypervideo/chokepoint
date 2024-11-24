@@ -4,10 +4,9 @@
 [![](https://docs.rs/chokepoint/badge.svg)](https://docs.rs/chokepoint)
 [![License](https://img.shields.io/crates/l/chokepoint?color=informational&logo=mpl-2)](/LICENSE)
 
-A library for traffic shaping in Rust. It provides a generic `futures::Stream` and `futures::Sink` transformer that
-can be used to modify the delivery of items, e.g. to simulate network conditions.
-
-Supports various simulated network conditions, such as:
+A library for simulating "traffic shaping" in Rust based on a generic `futures::Stream` and `futures::Sink`
+transformer that can be used to modify the delivery of items. The main purpose is to simulate various network
+conditions such as:
 - Delay (using a user provided function)
 - Packet loss
 - Packet reordering
