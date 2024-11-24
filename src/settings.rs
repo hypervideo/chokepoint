@@ -13,6 +13,7 @@ use wasmtimer::std::{
 };
 
 /// Settings for1
+// Uses double options to allow for partial updates. See `ChokeStream::apply_settings`.
 #[derive(Default)]
 #[allow(clippy::type_complexity)]
 pub struct ChokeSettings {
@@ -68,14 +69,17 @@ impl ChokeSettings {
 
     /// Set the bandwidth limit in bytes per second.
     pub fn set_bandwidth_limit(mut self, bytes_per_seconds: Option<usize>) -> Self {
-        if let Some(bytes_per_seconds) = bytes_per_seconds {
-            self.bandwidth_limiter = Some(Some(SlidingWindowCounter::new_with_time_provider(
-                bytes_per_seconds as _,
-                1000, /* ms */
-                || SystemTime::now().duration_since(UNIX_EPOCH).unwrap(),
-            )));
-        } else {
-            self.bandwidth_limiter = None;
+        match bytes_per_seconds {
+            Some(bytes_per_seconds) if bytes_per_seconds > 0 => {
+                self.bandwidth_limiter = Some(Some(SlidingWindowCounter::new_with_time_provider(
+                    bytes_per_seconds as _,
+                    1000, /* ms */
+                    || SystemTime::now().duration_since(UNIX_EPOCH).unwrap(),
+                )));
+            }
+            _ => {
+                self.bandwidth_limiter = Some(None);
+            }
         }
         self
     }
@@ -88,7 +92,7 @@ impl ChokeSettings {
         if let Some(f) = f {
             self.latency_distribution = Some(Some(Box::new(f)));
         } else {
-            self.latency_distribution = None;
+            self.latency_distribution = Some(None);
         }
         self
     }

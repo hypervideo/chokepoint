@@ -14,4 +14,7 @@ test: && examples
     cargo test --doc
 
 graph:
-    cargo run -q --example graph | tee >(graph - -x 'now' -y 'delta')
+    cargo run -q --example graph | tee >(graph - -x 'i' -y 'delta')
+    # cargo run -q --example graph | tee >(graph - -x 'created' -y 'received')
+    # cargo run -q --example graph | tee >(graph - -x 'i' -y 'created')
+    # cargo run -q --example graph | tee >(graph - -x 'created' -y 'i')

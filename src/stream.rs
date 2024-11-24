@@ -5,7 +5,7 @@ use crate::{
             interval,
             Interval,
         },
-        tokio_util::DelayQueue,
+        Instant,
     },
     ChokeSettings,
 };
@@ -19,7 +19,10 @@ use futures::{
 };
 use rand::Rng;
 use std::{
-    collections::VecDeque,
+    collections::{
+        BTreeMap,
+        VecDeque,
+    },
     pin::Pin,
     task::{
         Context,
@@ -29,7 +32,7 @@ use std::{
 };
 use tokio::sync::mpsc;
 
-const VERBOSE: bool = true;
+const VERBOSE: bool = false;
 
 /// A traffic shaper that can simulate various network conditions.
 ///
@@ -88,7 +91,7 @@ const VERBOSE: bool = true;
 pub struct ChokeStream<T> {
     stream: Box<dyn Stream<Item = T> + Unpin>,
     queue: VecDeque<T>,
-    delay_queue: DelayQueue<T>,
+    delay_queue: BTreeMap<Instant, T>,
     latency_distribution: Option<Box<dyn FnMut() -> Option<Duration> + Send + Sync>>,
     drop_probability: f64,
     corrupt_probability: f64,
@@ -111,7 +114,7 @@ impl<T> ChokeStream<T> {
         let mut stream = ChokeStream {
             stream,
             queue: VecDeque::new(),
-            delay_queue: DelayQueue::new(),
+            delay_queue: BTreeMap::new(),
             latency_distribution: None,
             drop_probability: 0.0,
             corrupt_probability: 0.0,
@@ -199,6 +202,11 @@ where
             debug!(queue = this.queue.len(), delay_queue = this.delay_queue.len(), packets_per_second = %this.packets_per_second, total_packets = %this.total_packets, "packets per second");
             this.packets_per_second = 0;
         }
+        let min_deadline = this.delay_queue.keys().next();
+        if let Some(min_deadline) = min_deadline {
+            let time_to_next_packet = *min_deadline - Instant::now();
+            debug!("min deadline: {:?}ns", time_to_next_packet.as_nanos());
+        }
 
         // First, take packets from the receiver and process them.
         if !this.backpressure || !this.pending() {
@@ -242,7 +250,9 @@ where
                             if VERBOSE {
                                 debug!(?delay, "delayed");
                             }
-                            this.delay_queue.insert(packet, delay);
+                            let now = Instant::now();
+                            let instant = now + delay;
+                            this.delay_queue.insert(instant, packet);
                         } else {
                             this.queue.push_back(packet);
                         }
@@ -260,12 +270,9 @@ where
             }
         }
 
-        while let Poll::Ready(Some(expired)) = this.delay_queue.poll_expired(cx) {
-            if VERBOSE {
-                debug!("requeing delayed packet");
-            }
-            this.queue.push_back(expired.into_inner());
-        }
+        let still_delayed = this.delay_queue.split_off(&Instant::now());
+        let expired = std::mem::replace(&mut this.delay_queue, still_delayed);
+        this.queue.extend(expired.into_values());
 
         // Retrieve packets from the normal or delay queue
         if VERBOSE {
@@ -273,8 +280,8 @@ where
         }
         if let Some(packet) = this.queue.pop_front() {
             // debug!(pending = this.queue.len(), "packet from queue");
-            // Simulate bandwidth limita
 
+            // Simulate bandwidth limita
             if this
                 .bandwidth_limiter
                 .as_mut()
@@ -283,13 +290,14 @@ where
                 if VERBOSE {
                     debug!("emitting packet");
                 }
+                if this.pending() {
+                    cx.waker().wake_by_ref();
+                }
                 return Poll::Ready(Some(packet));
             } else {
                 warn!("bandwidth limit exceeded");
                 // If the packet cannot be sent due to bandwidth limitation, reinsert it into the queue
                 this.queue.push_front(packet);
-                // return this.stream.poll_next_unpin(cx);
-                // cx.waker().wake_by_ref();
             }
         }
 
@@ -301,11 +309,17 @@ where
             );
         }
 
-        if this.timer.poll_tick(cx).is_ready() {
-            this.timer.reset();
-        }
-
         if this.pending() {
+            let now = Instant::now();
+            match this.delay_queue.keys().next() {
+                Some(min_deadline) if *min_deadline > now => {
+                    this.timer = interval(*min_deadline - now);
+                }
+                _ => {
+                    this.timer = interval(Duration::from_millis(1000));
+                }
+            }
+            let _ = this.timer.poll_tick(cx);
             Poll::Pending
         } else {
             this.stream.poll_next_unpin(cx)

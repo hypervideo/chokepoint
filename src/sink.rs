@@ -63,14 +63,14 @@ where
 {
     type Error = Si::Error;
 
-    fn poll_ready(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         if VERBOSE {
             debug!(backpressure = %self.backpressure, pending = %self.choke_stream.pending(), "poll_ready");
         }
         if self.backpressure && self.choke_stream.pending() {
             return Poll::Pending;
         }
-        Poll::Ready(Ok(()))
+        self.sink.poll_ready_unpin(cx)
     }
 
     fn start_send(self: Pin<&mut Self>, item: T) -> Result<(), Self::Error> {
@@ -86,45 +86,23 @@ where
             debug!(pending = %self.choke_stream.pending(), "poll_flush");
         }
 
-        // if let Poll::Ready(Err(err)) = self.sink.poll_flush_unpin(cx) {
-        //     error!("underlaying sink errored");
-        //     return Poll::Ready(Err(err));
-        // }
-
         match self.choke_stream.poll_next_unpin(cx) {
             Poll::Ready(Some(item)) => {
                 if VERBOSE {
                     debug!(pending = %self.choke_stream.pending(), "poll_flush: got item");
                 }
-                match self.sink.poll_ready_unpin(cx) {
-                    Poll::Ready(Ok(())) => {
-                        if VERBOSE {
-                            debug!("underlaying sink is ready, sending item");
-                        }
-                        match self.sink.start_send_unpin(item) {
-                            Ok(()) => self.sink.poll_flush_unpin(cx),
-                            Err(err) => Poll::Ready(Err(err)),
-                        }
-                    }
-                    Poll::Ready(Err(err)) => {
-                        error!("underlaying sink errored");
-                        Poll::Ready(Err(err))
-                    }
-                    Poll::Pending => {
-                        if VERBOSE {
-                            debug!("underlaying sink is pending");
-                        }
-                        Poll::Pending
-                    }
+                match self.sink.start_send_unpin(item) {
+                    Ok(()) => self.sink.poll_flush_unpin(cx),
+                    Err(err) => Poll::Ready(Err(err)),
                 }
             }
-            Poll::Ready(None) => self.sink.poll_flush_unpin(cx),
+            Poll::Ready(None) => Poll::Ready(Ok(())),
             Poll::Pending => {
                 if self.choke_stream.has_dropped_item() {
                     self.choke_stream.reset_dropped_item();
                     Poll::Ready(Ok(()))
                 } else {
-                    self.sink.poll_flush_unpin(cx)
+                    Poll::Pending
                 }
             }
         }
