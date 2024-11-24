@@ -30,7 +30,7 @@ async fn run() {
 
     for i in 0..10usize {
         println!("[{i}] emitting");
-        sink.send(TestPayload::new(i)).await.unwrap();
+        sink.send(TestPayload::new(i, 1)).await.unwrap();
     }
 
     println!("closing sink");
@@ -50,7 +50,7 @@ async fn run2() {
     );
 
     for i in 0..10usize {
-        sink.send(TestPayload::new(i)).await.unwrap();
+        sink.send(TestPayload::new(i, 1)).await.unwrap();
     }
 
     sink.close().await.unwrap();

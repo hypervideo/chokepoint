@@ -141,7 +141,7 @@ mod tests {
         let mut sink = ChokeSink::new(TestSink::default(), Default::default());
 
         for i in 0..10usize {
-            sink.send(TestPayload::new(i)).await.unwrap();
+            sink.send(TestPayload::new(i, 1)).await.unwrap();
         }
 
         sink.close().await.unwrap();
@@ -168,7 +168,7 @@ mod tests {
         );
 
         for i in 0..10usize {
-            sink.send(TestPayload::new(i)).await.unwrap();
+            sink.send(TestPayload::new(i, 1)).await.unwrap();
         }
 
         sink.close().await.unwrap();
@@ -194,7 +194,7 @@ mod tests {
         );
 
         for i in 0..10usize {
-            sink.send(TestPayload::new(i)).await.unwrap();
+            sink.send(TestPayload::new(i, 1)).await.unwrap();
         }
 
         sink.close().await.unwrap();

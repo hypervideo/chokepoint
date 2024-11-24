@@ -20,7 +20,10 @@ use futures::{
 };
 use std::path::PathBuf;
 use tokio::sync::mpsc;
-use tokio_stream::wrappers::ReceiverStream;
+use tokio_stream::wrappers::UnboundedReceiverStream;
+
+#[macro_use]
+extern crate tracing;
 
 #[derive(Parser)]
 struct Args {
@@ -36,8 +39,17 @@ struct Args {
     #[clap(short, long)]
     output: Option<PathBuf>,
 
+    #[clap(short = 'r', long, help = "send rate in packets per second")]
+    packet_rate: Option<usize>,
+
+    #[clap(short = 's', long, help = "packet size in bytes", default_value = "1B")]
+    packet_size: bytesize::ByteSize,
+
     #[clap(long, value_parser = parse_ordering, default_value = "unordered")]
     ordering: ChokeSettingsOrder,
+
+    #[clap(short = 'l', long)]
+    bandwidth_limit: Option<bytesize::ByteSize>,
 
     #[clap(flatten)]
     latency_distribution: LatencyDistribution,
@@ -101,30 +113,44 @@ async fn stream(
     Args {
         n,
         ordering,
+        packet_rate,
+        packet_size,
         latency_distribution: LatencyDistribution { mean, stddev },
+        bandwidth_limit,
         ..
     }: Args,
 ) {
-    let (tx, rx) = mpsc::channel(1);
+    let (tx, rx) = mpsc::unbounded_channel();
 
-    let mut traffic_shaper = ChokeStream::<TestPayload>::new(
-        Box::new(ReceiverStream::new(rx)),
+    let mut stream = ChokeStream::<TestPayload>::new(
+        Box::new(UnboundedReceiverStream::new(rx)),
         ChokeSettings::default()
             .set_ordering(Some(ordering))
             .set_latency_distribution(chokepoint::normal_distribution(mean, stddev, mean + stddev * 3.0))
-            // .set_bandwidth_limit(Some(250))
+            .set_bandwidth_limit(bandwidth_limit.map(|b| b.as_u64() as usize))
             .set_corrupt_probability(Some(0.0)),
     );
 
     tokio::spawn(async move {
+        let packet_size = packet_size.as_u64() as usize;
+        let delay = packet_rate.map(|packet_rate| std::time::Duration::from_micros(1_000_000 / packet_rate as u64));
+        let now = Utc::now();
         for i in 0..n {
-            tx.send(TestPayload::new(i)).await.unwrap();
+            tx.send(TestPayload::new(i, packet_size)).unwrap();
+            if let Some(delay) = delay {
+                tokio::time::sleep(delay).await;
+            }
         }
+        debug!(
+            "sent {} packets in {}µs",
+            n,
+            (Utc::now() - now).num_microseconds().unwrap()
+        );
     });
 
     writeln!(out, "i,received,created,delta").unwrap();
 
-    while let Some(packet) = traffic_shaper.next().await {
+    while let Some(packet) = stream.next().await {
         let now = Utc::now();
         let delta = now - packet.created;
         writeln!(
@@ -144,7 +170,10 @@ async fn sink(
     Args {
         n,
         ordering,
+        packet_rate,
+        packet_size,
         latency_distribution: LatencyDistribution { mean, stddev },
+        bandwidth_limit,
         ..
     }: Args,
 ) {
@@ -152,11 +181,18 @@ async fn sink(
         TestSink::default(),
         ChokeSettings::default()
             .set_ordering(Some(ordering))
-            .set_latency_distribution(normal_distribution(mean, stddev, mean + stddev * 3.0)),
+            .set_bandwidth_limit(bandwidth_limit.map(|b| b.as_u64() as usize))
+            .set_latency_distribution(normal_distribution(mean, stddev, mean + stddev * 3.0))
+            .set_corrupt_probability(Some(0.0)),
     );
 
+    let packet_size = packet_size.as_u64() as usize;
+    let delay = packet_rate.map(|packet_rate| std::time::Duration::from_micros(1_000_000 / packet_rate as u64));
     for i in 0..n {
-        sink.send(TestPayload::new(i)).await.unwrap();
+        sink.send(TestPayload::new(i, packet_size)).await.unwrap();
+        if let Some(delay) = delay {
+            tokio::time::sleep(delay).await;
+        }
     }
 
     sink.close().await.unwrap();
@@ -164,7 +200,7 @@ async fn sink(
     writeln!(out, "i,received,created,delta").unwrap();
     let items = sink.into_inner().received.into_inner().into_iter().collect::<Vec<_>>();
 
-    for (received, TestPayload { created, i }) in items {
+    for (received, TestPayload { created, i, .. }) in items {
         let delta = received - created;
         writeln!(
             out,

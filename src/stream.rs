@@ -33,7 +33,7 @@ use std::{
 };
 use tokio::sync::mpsc;
 
-const VERBOSE: bool = false;
+const VERBOSE: bool = true;
 
 /// A traffic shaper that can simulate various network conditions.
 ///
@@ -205,7 +205,7 @@ impl<T> Queue<T> {
     fn delayed(&self) -> usize {
         match self {
             Queue::Unordered(q) => q.delayed(),
-            Queue::Ordered(_) => 0,
+            Queue::Ordered(q) => q.delayed(),
         }
     }
 
@@ -314,6 +314,10 @@ impl<T> OrderedQueue<T> {
         self.queue.len()
     }
 
+    fn delayed(&self) -> usize {
+        self.delayed
+    }
+
     fn pending(&self) -> bool {
         !self.queue.is_empty()
     }
@@ -325,6 +329,10 @@ impl<T> OrderedQueue<T> {
     fn pop_front(&mut self, now: Instant) -> Option<T> {
         match self.queue.front() {
             Some((Some(instant), _)) if *instant > now => None,
+            Some((Some(_), _)) => {
+                self.delayed -= 1;
+                self.queue.pop_front().map(|(_, item)| item)
+            }
             _ => self.queue.pop_front().map(|(_, item)| item),
         }
     }
@@ -333,13 +341,7 @@ impl<T> OrderedQueue<T> {
         let item = if let Some(delay) = delay {
             // Take the current delay into account when scheduling the next packet
             let actual_delay = delay.saturating_sub(self.current_delay);
-            if actual_delay > Duration::from_secs(0) {
-                self.delayed += 1;
-                self.current_delay = actual_delay;
-                (Some(now + actual_delay), item)
-            } else {
-                (None, item)
-            }
+            (Some(now + actual_delay), item)
         } else {
             (None, item)
         };

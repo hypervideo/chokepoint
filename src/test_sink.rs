@@ -14,6 +14,7 @@ use std::{
 pub struct TestPayload {
     pub created: DateTime<Utc>,
     pub i: usize,
+    pub size: usize,
 }
 
 impl std::fmt::Display for TestPayload {
@@ -23,8 +24,12 @@ impl std::fmt::Display for TestPayload {
 }
 
 impl TestPayload {
-    pub fn new(i: usize) -> Self {
-        Self { created: Utc::now(), i }
+    pub fn new(i: usize, size: usize) -> Self {
+        Self {
+            created: Utc::now(),
+            size,
+            i,
+        }
     }
 
     pub fn elapsed(&self) -> Duration {
@@ -34,7 +39,7 @@ impl TestPayload {
 
 impl ChokeItem for TestPayload {
     fn byte_len(&self) -> usize {
-        8 + 8
+        self.size
     }
 
     fn corrupt(&mut self) {
