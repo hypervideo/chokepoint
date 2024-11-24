@@ -2,6 +2,15 @@
 resolver = "2"
 members = ["cli", "test-helpers"]
 
+[workspace.package]
+version = "0.2.0"
+authors = ["Robert Krahn <robert@hyper.video>", "Matthew Kim <matt@hyper.video>"]
+categories = ["simulation", "network-programming", "asynchronous"]
+homepage = "https://github.com/hypervideo/chokepoint"
+keywords = ["network", "congestion", "traffic", "simulation"]
+license = "MPL-2.0"
+repository = "https://github.com/hypervideo/chokepoint"
+
 [workspace.dependencies]
 burster = "0.1.1"
 bytes = "1.8.0"
@@ -21,16 +30,16 @@ wasmtimer = "0.4.1"
 
 [package]
 name = "chokepoint"
-version = "0.2.0"
+version.workspace = true
 edition = "2021"
 
-authors = ["Robert Krahn <robert@hyper.video>"]
-categories = ["simulation", "network-programming", "asynchronous"]
-homepage = "https://github.com/hypervideo/chokepoint"
-keywords = ["network", "congestion", "traffic", "simulation"]
-license = "MPL-2.0"
+authors.workspace = true
+categories.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+license.workspace = true
 readme = "README.md"
-repository = "https://github.com/hypervideo/chokepoint"
+repository.workspace = true
 description = "Generic stream transformer to simulate traffic / network congestion"
 
 [dependencies]

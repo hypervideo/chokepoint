@@ -6,8 +6,10 @@
 - Implement `ChokeItem` for `Result` and `Option`.
 - Allow updating the `ChokeStreamSettings` dynamically.
 - `ChokeSink` to wrap a `future::Sink`.
-- optional backpressure to wait with consuming the next item until the previous one has been processed.
+- `ChokeSettingsOrder` to enforce ordered or unordered packet delivery (in combination with delays)
+- CLI to experiment with the library.
 
 ### Changed
 - Rename types.
 - Bug fixes.
+
