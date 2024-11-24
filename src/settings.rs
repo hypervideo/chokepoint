@@ -29,10 +29,10 @@ pub struct ChokeSettings {
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChokeSettingsOrder {
     /// Consume items as fast as possible from the inner stream. If items are delayed, their order might be changed.
-    #[default]
     Unordered,
     /// Consume items as fast as possible from the inner stream, but ensure ordering. This is done by adjusting the
     /// delay of each item and might potentially block until a delayed item is ready.
+    #[default]
     Ordered,
     /// `Backpressure` works by not consuming from the inner stream until the currently queued item has been processed.
     /// Without backpressure, the [`crate::ChokeStream`] will consume items as fast as possible.
