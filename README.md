@@ -23,7 +23,7 @@ At [./cli](./cli) you can find a simple cli tool for interactive exploration. Us
 ![Example](./docs/demo.png)
 
 ```sh
- ~/p/s/chokepoint on main ⨯ chokepoint --help
+$ chokepoint --help
 Usage: chokepoint [OPTIONS] <MODE>
 
 Arguments:

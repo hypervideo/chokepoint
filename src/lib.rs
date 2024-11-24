@@ -21,7 +21,7 @@
 //! ![Example](./docs/demo.png)
 //!
 //! ```sh
-//!  ~/p/s/chokepoint on main ⨯ chokepoint --help
+//! $ chokepoint --help
 //! Usage: chokepoint [OPTIONS] <MODE>
 //!
 //! Arguments:
