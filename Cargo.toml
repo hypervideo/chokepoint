@@ -3,7 +3,6 @@ resolver = "2"
 members = ["cli", "test-helpers"]
 
 [workspace.package]
-version = "0.2.0"
 authors = ["Robert Krahn <robert@hyper.video>", "Matthew Kim <matt@hyper.video>"]
 categories = ["simulation", "network-programming", "asynchronous"]
 edition = "2021"
@@ -31,10 +30,10 @@ wasmtimer = "0.4.1"
 
 [package]
 name = "chokepoint"
+version = "0.3.0"
 readme = "README.md"
 description = "Generic stream transformer to simulate traffic / network congestion"
 
-version.workspace = true
 authors.workspace = true
 categories.workspace = true
 edition.workspace = true
