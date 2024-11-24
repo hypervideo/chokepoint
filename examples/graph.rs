@@ -5,6 +5,7 @@ use chokepoint::{
         TestSink,
     },
     ChokeSettings,
+    ChokeSettingsOrder,
     ChokeSink,
     ChokeStream,
 };
@@ -17,6 +18,7 @@ use futures::{
     stream::StreamExt,
     SinkExt,
 };
+use std::path::PathBuf;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
@@ -31,11 +33,23 @@ struct Args {
     #[clap(short, default_value = "250")]
     n: usize,
 
-    #[clap(long, action)]
-    backpressure: bool,
+    #[clap(short, long)]
+    output: Option<PathBuf>,
+
+    #[clap(long, value_parser = parse_ordering, default_value = "unordered")]
+    ordering: ChokeSettingsOrder,
 
     #[clap(flatten)]
     latency_distribution: LatencyDistribution,
+}
+
+fn parse_ordering(s: &str) -> Result<ChokeSettingsOrder, &'static str> {
+    match s {
+        "unordered" => Ok(ChokeSettingsOrder::Unordered),
+        "ordered" => Ok(ChokeSettingsOrder::Ordered),
+        "backpressure" => Ok(ChokeSettingsOrder::Backpressure),
+        _ => Err("invalid ordering"),
+    }
 }
 
 #[derive(Debug, clap::Args)]
@@ -67,16 +81,26 @@ async fn main() {
             .init();
     }
 
+    // file or stdout
+    let out = match &args.output {
+        Some(path) => {
+            let file = std::fs::File::create(path).unwrap();
+            Box::new(std::io::BufWriter::new(file)) as Box<dyn std::io::Write>
+        }
+        None => Box::new(std::io::stdout()) as Box<dyn std::io::Write>,
+    };
+
     match args.mode {
-        Mode::Stream => stream(args).await,
-        Mode::Sink => sink(args).await,
+        Mode::Stream => stream(out, args).await,
+        Mode::Sink => sink(out, args).await,
     }
 }
 
 async fn stream(
+    mut out: Box<dyn std::io::Write>,
     Args {
         n,
-        backpressure,
+        ordering,
         latency_distribution: LatencyDistribution { mean, stddev },
         ..
     }: Args,
@@ -86,7 +110,7 @@ async fn stream(
     let mut traffic_shaper = ChokeStream::<TestPayload>::new(
         Box::new(ReceiverStream::new(rx)),
         ChokeSettings::default()
-            .set_backpressure(Some(backpressure))
+            .set_ordering(Some(ordering))
             .set_latency_distribution(chokepoint::normal_distribution(mean, stddev, mean + stddev * 3.0))
             // .set_bandwidth_limit(Some(250))
             .set_corrupt_probability(Some(0.0)),
@@ -98,25 +122,28 @@ async fn stream(
         }
     });
 
-    println!("i,received,created,delta");
+    writeln!(out, "i,received,created,delta").unwrap();
 
     while let Some(packet) = traffic_shaper.next().await {
         let now = Utc::now();
         let delta = now - packet.created;
-        println!(
+        writeln!(
+            out,
             "{},{},{},{}",
             packet.i,
             now.to_rfc3339(),
             packet.created.to_rfc3339(),
             delta.num_milliseconds()
-        );
+        )
+        .unwrap();
     }
 }
 
 async fn sink(
+    mut out: Box<dyn std::io::Write>,
     Args {
         n,
-        backpressure,
+        ordering,
         latency_distribution: LatencyDistribution { mean, stddev },
         ..
     }: Args,
@@ -124,7 +151,7 @@ async fn sink(
     let mut sink = ChokeSink::new(
         TestSink::default(),
         ChokeSettings::default()
-            .set_backpressure(Some(backpressure))
+            .set_ordering(Some(ordering))
             .set_latency_distribution(normal_distribution(mean, stddev, mean + stddev * 3.0)),
     );
 
@@ -134,16 +161,18 @@ async fn sink(
 
     sink.close().await.unwrap();
 
-    println!("i,received,created,delta");
+    writeln!(out, "i,received,created,delta").unwrap();
     let items = sink.into_inner().received.into_inner().into_iter().collect::<Vec<_>>();
 
     for (received, TestPayload { created, i }) in items {
         let delta = received - created;
-        println!(
+        writeln!(
+            out,
             "{i},{},{},{}",
             received.to_rfc3339(),
             created.to_rfc3339(),
             delta.num_milliseconds()
-        );
+        )
+        .unwrap();
     }
 }

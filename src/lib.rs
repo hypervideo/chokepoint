@@ -28,11 +28,14 @@ mod sink;
 mod stream;
 pub(crate) mod time;
 
-#[cfg(any(test, debug_assertions))]
+#[doc(hidden)]
 pub mod test_sink;
 
 pub use item::ChokeItem;
 pub use latency::*;
-pub use settings::ChokeSettings;
+pub use settings::{
+    ChokeSettings,
+    ChokeSettingsOrder,
+};
 pub use sink::ChokeSink;
 pub use stream::ChokeStream;

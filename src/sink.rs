@@ -1,6 +1,7 @@
 use crate::{
     item::ChokeItem,
     ChokeSettings,
+    ChokeSettingsOrder,
     ChokeStream,
 };
 use futures::{
@@ -46,7 +47,7 @@ where
         Self {
             sink,
             sender: tx,
-            backpressure: settings.backpressure.unwrap_or_default(),
+            backpressure: settings.ordering.unwrap_or_default() == ChokeSettingsOrder::Backpressure,
             choke_stream: ChokeStream::new(stream, settings),
         }
     }
@@ -163,7 +164,7 @@ mod tests {
             TestSink::default(),
             ChokeSettings::default()
                 .set_latency_distribution(normal_distribution(5.0, 10.0, 100.0))
-                .set_backpressure(Some(false)),
+                .set_ordering(Some(ChokeSettingsOrder::Unordered)),
         );
 
         for i in 0..10usize {

@@ -8,6 +8,7 @@ use crate::{
         Instant,
     },
     ChokeSettings,
+    ChokeSettingsOrder,
 };
 use burster::{
     Limiter,
@@ -90,15 +91,14 @@ const VERBOSE: bool = false;
 #[pin_project]
 pub struct ChokeStream<T> {
     stream: Box<dyn Stream<Item = T> + Unpin>,
-    queue: VecDeque<T>,
-    delay_queue: BTreeMap<Instant, T>,
+    queue: Queue<T>,
     latency_distribution: Option<Box<dyn FnMut() -> Option<Duration> + Send + Sync>>,
     drop_probability: f64,
     corrupt_probability: f64,
     duplicate_probability: f64,
     bandwidth_limiter: Option<SlidingWindowCounter<fn() -> Duration>>,
     timer: Interval,
-    backpressure: bool,
+    ordering: ChokeSettingsOrder,
     settings_rx: Option<mpsc::Receiver<ChokeSettings>>,
     has_dropped_item: bool,
     total_packets: usize,
@@ -111,17 +111,17 @@ impl<T> ChokeStream<T> {
         if VERBOSE {
             debug!(?settings, "creating new ChokeStream");
         }
+        let ordering = settings.ordering.unwrap_or_default();
         let mut stream = ChokeStream {
             stream,
-            queue: VecDeque::new(),
-            delay_queue: BTreeMap::new(),
+            queue: Queue::queue_for_ordering(ordering),
             latency_distribution: None,
             drop_probability: 0.0,
             corrupt_probability: 0.0,
             duplicate_probability: 0.0,
             bandwidth_limiter: None,
             timer: interval(Duration::from_millis(100)),
-            backpressure: false,
+            ordering,
             settings_rx: None,
             has_dropped_item: false,
             total_packets: 0,
@@ -150,8 +150,8 @@ impl<T> ChokeStream<T> {
         if let Some(duplicate_probability) = settings.duplicate_probability {
             self.duplicate_probability = duplicate_probability;
         }
-        if let Some(backpressure) = settings.backpressure {
-            self.backpressure = backpressure;
+        if let Some(ordering) = settings.ordering {
+            self.ordering = ordering;
         }
         if let Some(bandwidth_limiter) = settings.bandwidth_limiter {
             self.bandwidth_limiter = bandwidth_limiter;
@@ -159,7 +159,7 @@ impl<T> ChokeStream<T> {
     }
 
     pub(crate) fn pending(&self) -> bool {
-        !self.queue.is_empty() || !self.delay_queue.is_empty()
+        self.queue.pending()
     }
 
     pub(crate) fn has_dropped_item(&self) -> bool {
@@ -168,6 +168,186 @@ impl<T> ChokeStream<T> {
 
     pub(crate) fn reset_dropped_item(&mut self) {
         self.has_dropped_item = false;
+    }
+
+    fn backpressure(&self) -> bool {
+        self.ordering == ChokeSettingsOrder::Backpressure
+    }
+}
+
+enum Queue<T> {
+    Unordered(UnorderedQueue<T>),
+    Ordered(OrderedQueue<T>),
+}
+
+impl<T> Queue<T> {
+    fn queue_for_ordering(ordering: ChokeSettingsOrder) -> Self {
+        match ordering {
+            ChokeSettingsOrder::Ordered => Queue::Ordered(OrderedQueue {
+                queue: VecDeque::new(),
+                delayed: 0,
+                current_delay: Duration::ZERO,
+            }),
+            ChokeSettingsOrder::Unordered | ChokeSettingsOrder::Backpressure => Queue::Unordered(UnorderedQueue {
+                queue: VecDeque::new(),
+                delay_queue: BTreeMap::new(),
+            }),
+        }
+    }
+
+    fn queued(&self) -> usize {
+        match self {
+            Queue::Unordered(q) => q.queued(),
+            Queue::Ordered(q) => q.queued(),
+        }
+    }
+
+    fn delayed(&self) -> usize {
+        match self {
+            Queue::Unordered(q) => q.delayed(),
+            Queue::Ordered(_) => 0,
+        }
+    }
+
+    fn pending(&self) -> bool {
+        match self {
+            Queue::Unordered(q) => q.pending(),
+            Queue::Ordered(q) => q.pending(),
+        }
+    }
+
+    fn deadline(&self) -> Option<Instant> {
+        match self {
+            Queue::Unordered(q) => q.deadline(),
+            Queue::Ordered(q) => q.deadline(),
+        }
+    }
+
+    fn expire(&mut self, now: Instant) {
+        match self {
+            Queue::Unordered(q) => q.expire(now),
+            Queue::Ordered(_) => {}
+        }
+    }
+
+    fn pop_front(&mut self, now: Instant) -> Option<T> {
+        match self {
+            Queue::Unordered(q) => q.pop_front(),
+            Queue::Ordered(q) => q.pop_front(now),
+        }
+    }
+
+    fn push_front(&mut self, item: T, delay: Option<Duration>, now: Instant) {
+        match self {
+            Queue::Unordered(q) => q.push_front(item, delay, now),
+            Queue::Ordered(q) => q.push(true, item, delay, now),
+        }
+    }
+
+    fn push_back(&mut self, item: T, delay: Option<Duration>, now: Instant) {
+        match self {
+            Queue::Unordered(q) => q.push_back(item, delay, now),
+            Queue::Ordered(q) => q.push(false, item, delay, now),
+        }
+    }
+}
+
+struct UnorderedQueue<T> {
+    queue: VecDeque<T>,
+    delay_queue: BTreeMap<Instant, T>,
+}
+
+impl<T> UnorderedQueue<T> {
+    fn queued(&self) -> usize {
+        self.queue.len()
+    }
+
+    fn delayed(&self) -> usize {
+        self.delay_queue.len()
+    }
+
+    fn pending(&self) -> bool {
+        !self.queue.is_empty() || !self.delay_queue.is_empty()
+    }
+
+    fn deadline(&self) -> Option<Instant> {
+        self.delay_queue.keys().next().copied()
+    }
+
+    fn expire(&mut self, now: Instant) {
+        let still_delayed = self.delay_queue.split_off(&now);
+        let expired = std::mem::replace(&mut self.delay_queue, still_delayed);
+        self.queue.extend(expired.into_values());
+    }
+
+    fn pop_front(&mut self) -> Option<T> {
+        self.queue.pop_front()
+    }
+
+    fn push_front(&mut self, item: T, delay: Option<Duration>, now: Instant) {
+        if let Some(delay) = delay {
+            let instant = now + delay;
+            self.delay_queue.insert(instant, item);
+        } else {
+            self.queue.push_front(item);
+        }
+    }
+
+    fn push_back(&mut self, item: T, delay: Option<Duration>, now: Instant) {
+        if let Some(delay) = delay {
+            let instant = now + delay;
+            self.delay_queue.insert(instant, item);
+        } else {
+            self.queue.push_back(item);
+        }
+    }
+}
+
+struct OrderedQueue<T> {
+    queue: VecDeque<(Option<Instant>, T)>,
+    delayed: usize,
+    current_delay: Duration,
+}
+
+impl<T> OrderedQueue<T> {
+    fn queued(&self) -> usize {
+        self.queue.len()
+    }
+
+    fn pending(&self) -> bool {
+        !self.queue.is_empty()
+    }
+
+    fn deadline(&self) -> Option<Instant> {
+        self.queue.front().and_then(|(instant, _)| *instant)
+    }
+
+    fn pop_front(&mut self, now: Instant) -> Option<T> {
+        match self.queue.front() {
+            Some((Some(instant), _)) if *instant > now => None,
+            _ => self.queue.pop_front().map(|(_, item)| item),
+        }
+    }
+
+    fn push(&mut self, front: bool, item: T, delay: Option<Duration>, now: Instant) {
+        let item = if let Some(delay) = delay {
+            // Take the current delay into account when scheduling the next packet
+            let actual_delay = delay.saturating_sub(self.current_delay);
+            if actual_delay > Duration::from_secs(0) {
+                self.delayed += 1;
+                self.current_delay = actual_delay;
+                (Some(now + actual_delay), item)
+            } else {
+                (None, item)
+            }
+        } else {
+            (None, item)
+        };
+        if front {
+            self.queue.push_front(item);
+        } else {
+            self.queue.push_back(item)
+        };
     }
 }
 
@@ -180,8 +360,8 @@ where
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         if VERBOSE {
             debug!(
-                queue = self.queue.len(),
-                delay_queue = self.delay_queue.len(),
+                queued = self.queue.queued(),
+                delayed = self.queue.delayed(),
                 "poll_next"
             );
         }
@@ -194,22 +374,16 @@ where
             this.apply_settings(new_settings);
         }
 
-        this.total_packets += 1;
-        this.packets_per_second += 1;
-
         if this.packets_per_second_timer.poll_tick(cx).is_ready() {
             this.packets_per_second_timer.reset();
-            debug!(queue = this.queue.len(), delay_queue = this.delay_queue.len(), packets_per_second = %this.packets_per_second, total_packets = %this.total_packets, "packets per second");
+            debug!(queued = this.queue.queued(), delayed = this.queue.delayed(), packets_per_second = %this.packets_per_second, total_packets = %this.total_packets, "packets per second");
             this.packets_per_second = 0;
         }
-        let min_deadline = this.delay_queue.keys().next();
-        if let Some(min_deadline) = min_deadline {
-            let time_to_next_packet = *min_deadline - Instant::now();
-            debug!("min deadline: {:?}ns", time_to_next_packet.as_nanos());
-        }
+
+        let now = Instant::now();
 
         // First, take packets from the receiver and process them.
-        if !this.backpressure || !this.pending() {
+        if !this.backpressure() || !this.queue.pending() {
             if VERBOSE {
                 debug!("waiting for packets from inner stream");
             }
@@ -236,29 +410,26 @@ where
                         let delay = this.latency_distribution.as_mut().and_then(|latency_fn| latency_fn());
 
                         // Simulate packet duplication
-                        if rng.gen::<f64>() < this.duplicate_probability {
-                            if let Some(packet) = packet.duplicate() {
-                                debug!("duplicated packet");
-                                this.queue.push_back(packet);
-                            } else {
-                                warn!("Failed to duplicate packet");
-                            }
-                        }
+                        let duplicate = (rng.gen::<f64>() < this.duplicate_probability)
+                            .then(|| {
+                                if let Some(packet) = packet.duplicate() {
+                                    debug!("duplicated packet");
+                                    Some(packet)
+                                } else {
+                                    warn!("Failed to duplicate packet");
+                                    None
+                                }
+                            })
+                            .flatten();
 
                         // Insert the packet into the DelayQueue with the calculated delay
-                        if let Some(delay) = delay {
-                            if VERBOSE {
-                                debug!(?delay, "delayed");
-                            }
-                            let now = Instant::now();
-                            let instant = now + delay;
-                            this.delay_queue.insert(instant, packet);
-                        } else {
-                            this.queue.push_back(packet);
+                        this.queue.push_back(packet, delay, now);
+                        if let Some(duplicate) = duplicate {
+                            this.queue.push_back(duplicate, None, now);
                         }
                     }
 
-                    Poll::Ready(None) if this.delay_queue.is_empty() && this.queue.is_empty() => {
+                    Poll::Ready(None) if !this.queue.pending() => {
                         return Poll::Ready(None);
                     }
 
@@ -270,15 +441,13 @@ where
             }
         }
 
-        let still_delayed = this.delay_queue.split_off(&Instant::now());
-        let expired = std::mem::replace(&mut this.delay_queue, still_delayed);
-        this.queue.extend(expired.into_values());
+        this.queue.expire(now);
 
         // Retrieve packets from the normal or delay queue
         if VERBOSE {
-            debug!(pending = this.queue.len(), "retrieving packet");
+            debug!(pending = this.queue.pending(), "retrieving packet");
         }
-        if let Some(packet) = this.queue.pop_front() {
+        if let Some(packet) = this.queue.pop_front(now) {
             // debug!(pending = this.queue.len(), "packet from queue");
 
             // Simulate bandwidth limita
@@ -290,30 +459,35 @@ where
                 if VERBOSE {
                     debug!("emitting packet");
                 }
+
+                this.total_packets += 1;
+                this.packets_per_second += 1;
+
                 if this.pending() {
                     cx.waker().wake_by_ref();
                 }
+
                 return Poll::Ready(Some(packet));
             } else {
                 warn!("bandwidth limit exceeded");
                 // If the packet cannot be sent due to bandwidth limitation, reinsert it into the queue
-                this.queue.push_front(packet);
+                this.queue.push_front(packet, None, now);
             }
         }
 
         if VERBOSE {
             debug!(
-                queue = this.queue.len(),
-                delay_queue = this.delay_queue.len(),
+                queue = this.queue.queued(),
+                delayed = this.queue.delayed(),
                 "Poll::Pending"
             );
         }
 
         if this.pending() {
             let now = Instant::now();
-            match this.delay_queue.keys().next() {
-                Some(min_deadline) if *min_deadline > now => {
-                    this.timer = interval(*min_deadline - now);
+            match this.queue.deadline() {
+                Some(deadline) if deadline > now => {
+                    this.timer = interval(deadline - now);
                 }
                 _ => {
                     this.timer = interval(Duration::from_millis(1000));
@@ -352,5 +526,44 @@ mod tests {
             .await;
 
         assert_eq!(output, (0..10).collect::<Vec<_>>());
+    }
+
+    #[yare::parameterized(
+        unordered = { ChokeSettingsOrder::Unordered, vec![2, 3, 1] },
+        ordered = { ChokeSettingsOrder::Ordered, vec![1, 2, 3] },
+        backpressure = { ChokeSettingsOrder::Backpressure, vec![1, 2, 3] }
+    )]
+    #[test_macro(tokio::test)]
+    async fn ordering(ordering: ChokeSettingsOrder, expected: Vec<usize>) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let stream = ChokeStream::new(
+            Box::new(UnboundedReceiverStream::new(rx)),
+            ChokeSettings::default()
+                .set_ordering(Some(ordering))
+                .set_latency_distribution(Some({
+                    let mut n = 0;
+                    move || {
+                        n += 1;
+                        match n {
+                            1 => Some(Duration::from_millis(150)),
+                            2 => Some(Duration::from_millis(50)),
+                            3 => Some(Duration::from_millis(100)),
+                            _ => None,
+                        }
+                    }
+                })),
+        );
+
+        tx.send(Bytes::from(1usize.to_le_bytes().to_vec())).unwrap();
+        tx.send(Bytes::from(2usize.to_le_bytes().to_vec())).unwrap();
+        tx.send(Bytes::from(3usize.to_le_bytes().to_vec())).unwrap();
+        drop(tx);
+
+        let output = stream
+            .map(|packet| usize::from_le_bytes(packet[0..8].try_into().unwrap()))
+            .collect::<Vec<_>>()
+            .await;
+
+        assert_eq!(output, expected);
     }
 }

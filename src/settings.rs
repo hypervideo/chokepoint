@@ -12,18 +12,31 @@ use wasmtimer::std::{
     UNIX_EPOCH,
 };
 
-/// Settings for1
+/// Settings for the [`crate::ChokeStream`] and [`crate::ChokeSink`].
 // Uses double options to allow for partial updates. See `ChokeStream::apply_settings`.
 #[derive(Default)]
 #[allow(clippy::type_complexity)]
 pub struct ChokeSettings {
+    pub(crate) settings_rx: Option<mpsc::Receiver<ChokeSettings>>,
     pub(crate) latency_distribution: Option<Option<Box<dyn FnMut() -> Option<Duration> + Send + Sync>>>,
     pub(crate) drop_probability: Option<f64>,
     pub(crate) corrupt_probability: Option<f64>,
     pub(crate) duplicate_probability: Option<f64>,
     pub(crate) bandwidth_limiter: Option<Option<SlidingWindowCounter<fn() -> Duration>>>,
-    pub(crate) backpressure: Option<bool>,
-    pub(crate) settings_rx: Option<mpsc::Receiver<ChokeSettings>>,
+    pub(crate) ordering: Option<ChokeSettingsOrder>,
+}
+
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChokeSettingsOrder {
+    /// Consume items as fast as possible from the inner stream. If items are delayed, their order might be changed.
+    #[default]
+    Unordered,
+    /// Consume items as fast as possible from the inner stream, but ensure ordering. This is done by adjusting the
+    /// delay of each item and might potentially block until a delayed item is ready.
+    Ordered,
+    /// `Backpressure` works by not consuming from the inner stream until the currently queued item has been processed.
+    /// Without backpressure, the [`crate::ChokeStream`] will consume items as fast as possible.
+    Backpressure,
 }
 
 impl std::fmt::Debug for ChokeSettings {
@@ -48,19 +61,14 @@ impl std::fmt::Debug for ChokeSettings {
                     &"None"
                 },
             )
-            .field("backpressure", &self.backpressure)
+            .field("ordering", &self.ordering)
             .finish()
     }
 }
 
 impl ChokeSettings {
-    pub fn with_updater(settings_rx: mpsc::Receiver<ChokeSettings>) -> Self {
-        Self {
-            settings_rx: Some(settings_rx),
-            ..Default::default()
-        }
-    }
-
+    /// Produces a [`mpsc::Sender`] that can be used to live update the configuration being used by the
+    /// [`crate::ChokeStream`] / [`crate::ChokeSink`] without recreating them.
     pub fn settings_updater(&mut self) -> mpsc::Sender<ChokeSettings> {
         let (settings_tx, settings_rx) = mpsc::channel(1);
         self.settings_rx = Some(settings_rx);
@@ -84,7 +92,8 @@ impl ChokeSettings {
         self
     }
 
-    /// Set the latency distribution function.
+    /// Set the latency distribution function. It produces an optional [`Duration`] that represents the latency to be
+    /// added to the packet. If the function returns `None`, no latency will be added.
     pub fn set_latency_distribution<F>(mut self, f: Option<F>) -> Self
     where
         F: FnMut() -> Option<Duration> + Send + Sync + 'static,
@@ -115,10 +124,9 @@ impl ChokeSettings {
         self
     }
 
-    /// Enable backpressure. Will not consume from inner stream until the choke queues are empty. Otherwise will consume
-    /// from inner stream as fast as possible.
-    pub fn set_backpressure(mut self, enable: Option<bool>) -> Self {
-        self.backpressure = enable;
+    /// Change the item ordering behavior. See [`ChokeSettingsOrder`] for more information.
+    pub fn set_ordering(mut self, ordering: Option<ChokeSettingsOrder>) -> Self {
+        self.ordering = ordering;
         self
     }
 }

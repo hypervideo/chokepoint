@@ -5,6 +5,7 @@ use chokepoint::{
         TestSink,
     },
     ChokeSettings,
+    ChokeSettingsOrder,
     ChokeSink,
 };
 use futures::SinkExt as _;
@@ -45,7 +46,7 @@ async fn run2() {
         TestSink::default(),
         ChokeSettings::default()
             .set_latency_distribution(normal_distribution(5.0, 10.0, 100.0))
-            .set_backpressure(Some(false)),
+            .set_ordering(Some(ChokeSettingsOrder::Backpressure)),
     );
 
     for i in 0..10usize {
