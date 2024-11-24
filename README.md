@@ -51,5 +51,3 @@ Options:
   -h, --help
           Print help
 ```
-
-License: MPL-2.0
