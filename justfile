@@ -13,13 +13,8 @@ test: && examples
     cargo nextest run
     cargo test --doc
 
+# just graph stream -n 500 --mean 25 --stddev 5 --ordering ordered --packet-size 1000B --bandwidth-limit 190KB --packet-rate 241
 graph *args="":
-    # cargo run -q --example graph -- {{ args }} | tee >(graph - -x 'i' -y 'delta')
-    cargo run --release -q --example graph -- -o example.csv {{ args }}
-    graph example.csv -x 'i' -y 'delta'
-    # graph example.csv -x 'received' -y 'delta'
-    # graph example.csv -x 'created' -y 'delta'
+    chokepoint -o example.csv {{ args }}
+    graph example.csv -x 'i' --xlabel "packet" -y 'delta' --ylabel "time in ms"
     rm example.csv
-    # cargo run -q --example graph | tee >(graph - -x 'created' -y 'received')
-    # cargo run -q --example graph | tee >(graph - -x 'i' -y 'created')
-    # cargo run -q --example graph | tee >(graph - -x 'created' -y 'i')

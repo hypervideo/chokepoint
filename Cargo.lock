@@ -193,10 +193,8 @@ version = "0.2.0"
 dependencies = [
  "burster",
  "bytes",
- "bytesize",
+ "chokepoint-test-helpers",
  "chrono",
- "clap",
- "color-eyre",
  "futures",
  "pin-project",
  "rand",
@@ -209,6 +207,33 @@ dependencies = [
  "tracing-subscriber",
  "wasmtimer",
  "yare",
+]
+
+[[package]]
+name = "chokepoint-cli"
+version = "0.1.0"
+dependencies = [
+ "bytesize",
+ "chokepoint",
+ "chokepoint-test-helpers",
+ "chrono",
+ "clap",
+ "color-eyre",
+ "futures",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "chokepoint-test-helpers"
+version = "0.1.0"
+dependencies = [
+ "chokepoint",
+ "chrono",
+ "futures",
+ "tracing",
 ]
 
 [[package]]

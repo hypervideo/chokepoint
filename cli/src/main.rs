@@ -1,13 +1,13 @@
 use chokepoint::{
     normal_distribution,
-    test_sink::{
-        TestPayload,
-        TestSink,
-    },
     ChokeSettings,
     ChokeSettingsOrder,
     ChokeSink,
     ChokeStream,
+};
+use chokepoint_test_helpers::{
+    TestPayload,
+    TestSink,
 };
 use chrono::prelude::*;
 use clap::{
@@ -30,25 +30,25 @@ struct Args {
     #[clap(short, long, action)]
     verbose: bool,
 
-    #[clap()]
+    #[clap(help = "Simulate a sink or a stream")]
     mode: Mode,
 
-    #[clap(short, default_value = "250")]
+    #[clap(short, default_value = "250", help = "Number of packets to send")]
     n: usize,
 
-    #[clap(short, long)]
+    #[clap(short, long, help = "Output file (csv) with packet timing information")]
     output: Option<PathBuf>,
 
-    #[clap(short = 'r', long, help = "send rate in packets per second")]
+    #[clap(short = 'r', long, help = "Send rate in packets per second")]
     packet_rate: Option<usize>,
 
-    #[clap(short = 's', long, help = "packet size in bytes", default_value = "1B")]
+    #[clap(short = 's', long, help = "Packet size in bytes", default_value = "1B")]
     packet_size: bytesize::ByteSize,
 
-    #[clap(long, value_parser = parse_ordering, default_value = "unordered")]
+    #[clap(long, value_parser = parse_ordering, default_value = "ordered")]
     ordering: ChokeSettingsOrder,
 
-    #[clap(short = 'l', long)]
+    #[clap(short = 'l', long, help = "Bandwidth limit")]
     bandwidth_limit: Option<bytesize::ByteSize>,
 
     #[clap(flatten)]
@@ -67,10 +67,14 @@ fn parse_ordering(s: &str) -> Result<ChokeSettingsOrder, &'static str> {
 #[derive(Debug, clap::Args)]
 #[group(required = false, multiple = true)]
 struct LatencyDistribution {
-    #[clap(long, default_value = "0.0")]
+    #[clap(long, default_value = "0.0", help = "Mean latency in ms")]
     mean: f64,
 
-    #[clap(long, default_value = "0.0")]
+    #[clap(
+        long,
+        default_value = "0.0",
+        help = "Standard deviation of latency in ms (aka jitter)"
+    )]
     stddev: f64,
 }
 
@@ -93,7 +97,9 @@ async fn main() {
             .init();
     }
 
-    // file or stdout
+    let now = Utc::now();
+    let n = args.n;
+
     let out = match &args.output {
         Some(path) => {
             let file = std::fs::File::create(path).unwrap();
@@ -106,6 +112,10 @@ async fn main() {
         Mode::Stream => stream(out, args).await,
         Mode::Sink => sink(out, args).await,
     }
+
+    let elapsed = (Utc::now() - now).num_milliseconds();
+    let ms_per_packet = elapsed as f64 / n as f64;
+    info!("done in {}ms ms/packet={:.2}", elapsed, ms_per_packet);
 }
 
 async fn stream(

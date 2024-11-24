@@ -1,0 +1,10 @@
+[package]
+name = "chokepoint-test-helpers"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+chokepoint.workspace = true
+chrono.workspace = true
+futures.workspace = true
+tracing.workspace = true
