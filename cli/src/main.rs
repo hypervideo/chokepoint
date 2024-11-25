@@ -45,11 +45,21 @@ struct Args {
     #[clap(short = 's', long, help = "Packet size in bytes", default_value = "1B")]
     packet_size: bytesize::ByteSize,
 
+    #[clap(long, help = "Packet drop probability", default_value = "0.0")]
+    drop_prob: f64,
+
     #[clap(long, value_parser = parse_ordering, default_value = "ordered")]
     ordering: ChokeSettingsOrder,
 
-    #[clap(short = 'l', long, help = "Bandwidth limit")]
+    #[clap(long, help = "Bandwidth limit")]
     bandwidth_limit: Option<bytesize::ByteSize>,
+
+    #[clap(
+        long,
+        help = "Drop probability when bandwidth limit is reached",
+        default_value = "0.0"
+    )]
+    bandwidth_drop_prob: f64,
 
     #[clap(flatten)]
     latency_distribution: LatencyDistribution,
@@ -127,6 +137,7 @@ async fn stream(
         packet_size,
         latency_distribution: LatencyDistribution { mean, stddev },
         bandwidth_limit,
+        bandwidth_drop_prob,
         ..
     }: Args,
 ) {
@@ -137,7 +148,7 @@ async fn stream(
         ChokeSettings::default()
             .set_ordering(Some(ordering))
             .set_latency_distribution(chokepoint::normal_distribution(mean, stddev, mean + stddev * 3.0))
-            .set_bandwidth_limit(bandwidth_limit.map(|b| b.as_u64() as usize))
+            .set_bandwidth_limit(bandwidth_limit.map(|b| b.as_u64() as usize), bandwidth_drop_prob)
             .set_corrupt_probability(Some(0.0)),
     );
 
@@ -202,6 +213,7 @@ async fn sink(
         packet_size,
         latency_distribution: LatencyDistribution { mean, stddev },
         bandwidth_limit,
+        bandwidth_drop_prob,
         ..
     }: Args,
 ) {
@@ -209,7 +221,7 @@ async fn sink(
         TestSink::default(),
         ChokeSettings::default()
             .set_ordering(Some(ordering))
-            .set_bandwidth_limit(bandwidth_limit.map(|b| b.as_u64() as usize))
+            .set_bandwidth_limit(bandwidth_limit.map(|b| b.as_u64() as usize), bandwidth_drop_prob)
             .set_latency_distribution(normal_distribution(mean, stddev, mean + stddev * 3.0))
             .set_corrupt_probability(Some(0.0)),
     );

@@ -33,7 +33,7 @@ async fn main() {
                 .set_latency_distribution(normal_distribution(10.0, 15.0, 100.0))
                 .set_drop_probability(Some(0.3))
                 .set_corrupt_probability(Some(0.0))
-                .set_bandwidth_limit(Some(100)),
+                .set_bandwidth_limit(Some(100), 0.0),
         )
         .await
         .unwrap();

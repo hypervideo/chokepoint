@@ -1,5 +1,6 @@
 use crate::{
     item::ChokeItem,
+    settings::BandwithLimit,
     time::{
         tokio_time::{
             interval,
@@ -10,10 +11,7 @@ use crate::{
     ChokeSettings,
     ChokeSettingsOrder,
 };
-use burster::{
-    Limiter,
-    SlidingWindowCounter,
-};
+use burster::Limiter;
 use futures::{
     Stream,
     StreamExt,
@@ -63,7 +61,7 @@ const VERBOSE: bool = false;
 ///         // Set other parameters as needed
 ///         .set_drop_probability(Some(0.0))
 ///         .set_corrupt_probability(Some(0.0))
-///         .set_bandwidth_limit(Some(100 /* bytes per second */)),
+///         .set_bandwidth_limit(Some(100 /* bytes per second */), 0.1 /* drop prob */),
 /// );
 ///
 /// // Spawn a task to send packets into the ChokeStream
@@ -96,12 +94,14 @@ pub struct ChokeStream<T> {
     drop_probability: f64,
     corrupt_probability: f64,
     duplicate_probability: f64,
-    bandwidth_limiter: Option<SlidingWindowCounter<fn() -> Duration>>,
+    bandwidth_limit: Option<BandwithLimit>,
+    bandwidth_limit_active: bool,
     timer: Interval,
     ordering: ChokeSettingsOrder,
     settings_rx: Option<mpsc::Receiver<ChokeSettings>>,
     has_dropped_item: bool,
     total_packets: usize,
+    dropped_packets: usize,
     packets_per_second: usize,
     debug_timer: Interval,
 }
@@ -119,12 +119,14 @@ impl<T> ChokeStream<T> {
             drop_probability: 0.0,
             corrupt_probability: 0.0,
             duplicate_probability: 0.0,
-            bandwidth_limiter: None,
-            timer: interval(Duration::from_millis(100)),
+            bandwidth_limit: None,
+            bandwidth_limit_active: false,
+            timer: interval(Duration::from_millis(20)),
             ordering,
             settings_rx: None,
             has_dropped_item: false,
             total_packets: 0,
+            dropped_packets: 0,
             packets_per_second: 0,
             debug_timer: interval(Duration::from_secs_f64(2.5)),
         };
@@ -154,8 +156,8 @@ impl<T> ChokeStream<T> {
             self.ordering = ordering;
             self.queue = Queue::queue_for_ordering(ordering);
         }
-        if let Some(bandwidth_limiter) = settings.bandwidth_limiter {
-            self.bandwidth_limiter = bandwidth_limiter;
+        if let Some(bandwidth_limit) = settings.bandwidth_limit {
+            self.bandwidth_limit = bandwidth_limit;
         }
     }
 
@@ -375,18 +377,26 @@ where
 
         if this.debug_timer.poll_tick(cx).is_ready() {
             this.debug_timer.reset();
-            debug!(queued = this.queue.queued(), delayed = this.queue.delayed(), packets_per_second = %this.packets_per_second, total_packets = %this.total_packets, ordering = ?this.ordering, "packets per second");
+            debug!(
+                queued = this.queue.queued(),
+                delayed = this.queue.delayed(),
+                packets_per_second = %this.packets_per_second,
+                total_packets = %this.total_packets,
+                dropped_packets = %this.dropped_packets,
+                ordering = ?this.ordering,
+                "packets per second"
+            );
             this.packets_per_second = 0;
         }
 
         let now = Instant::now();
+        let mut rng = rand::thread_rng();
 
         // First, take packets from the receiver and process them.
         if !this.backpressure() || !this.queue.pending() {
             if VERBOSE {
                 debug!("waiting for packets from inner stream");
             }
-            let mut rng = rand::thread_rng();
             loop {
                 match this.stream.poll_next_unpin(cx) {
                     Poll::Ready(Some(mut packet)) => {
@@ -396,9 +406,25 @@ where
 
                         // Simulate packet loss
                         if rng.gen::<f64>() < this.drop_probability {
-                            debug!("dropped packet");
+                            if VERBOSE {
+                                debug!("dropped packet");
+                            }
+                            this.dropped_packets += 1;
                             this.has_dropped_item = true;
                             continue;
+                        }
+
+                        if let (Some(BandwithLimit { drop_ratio, .. }), true) =
+                            (&this.bandwidth_limit, this.bandwidth_limit_active)
+                        {
+                            if rng.gen::<f64>() < *drop_ratio {
+                                if VERBOSE {
+                                    debug!("dropped packet (bandwidth)");
+                                }
+                                this.dropped_packets += 1;
+                                this.has_dropped_item = true;
+                                continue;
+                            }
                         }
 
                         // Simulate packet corruption
@@ -451,26 +477,48 @@ where
             // debug!(pending = this.queue.len(), "packet from queue");
 
             // Simulate bandwidth limita
-            if this
-                .bandwidth_limiter
+            let limit = this
+                .bandwidth_limit
                 .as_mut()
-                .map_or(true, |l| l.try_consume(packet.byte_len() as _).is_ok())
-            {
+                .map(|l| (l.window.try_consume(packet.byte_len() as _).is_err(), l.drop_ratio));
+            let packet = match (limit, this.bandwidth_limit_active) {
+                // No limit
+                (None, _) | (Some((false, _)), _) => Some(packet),
+
+                // Limit reached with this very packet; drop it
+                (Some((true, drop_ratio)), false) if rng.gen::<f64>() < drop_ratio => {
+                    if VERBOSE {
+                        debug!("dropped packet (bandwidth)");
+                    }
+                    this.dropped_packets += 1;
+                    this.has_dropped_item = true;
+                    this.bandwidth_limit_active = true;
+                    None
+                }
+
+                // Limit already reached or reached right now but delay packet until bandwidth clears up
+                (Some((true, _)), true) | (Some((true, _)), false) => {
+                    warn!("bandwidth limit exceeded");
+                    // If the packet cannot be sent due to bandwidth limitation, reinsert it into the queue
+                    this.queue.push_front(packet, None, now);
+                    this.bandwidth_limit_active = true;
+                    None
+                }
+            };
+
+            if let Some(packet) = packet {
                 if VERBOSE {
                     debug!("emitting packet");
                 }
 
                 this.total_packets += 1;
                 this.packets_per_second += 1;
+                this.bandwidth_limit_active = false;
 
                 // Poll the stream again immediately for processing the next packet
                 cx.waker().wake_by_ref();
 
                 return Poll::Ready(Some(packet));
-            } else {
-                warn!("bandwidth limit exceeded");
-                // If the packet cannot be sent due to bandwidth limitation, reinsert it into the queue
-                this.queue.push_front(packet, None, now);
             }
         }
 
@@ -489,7 +537,7 @@ where
                     this.timer = interval(deadline - now);
                 }
                 _ => {
-                    this.timer = interval(Duration::from_millis(1000));
+                    this.timer = interval(Duration::from_millis(20));
                 }
             }
             let _ = this.timer.poll_tick(cx);

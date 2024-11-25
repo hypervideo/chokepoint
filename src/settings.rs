@@ -22,7 +22,7 @@ pub struct ChokeSettings {
     pub(crate) drop_probability: Option<f64>,
     pub(crate) corrupt_probability: Option<f64>,
     pub(crate) duplicate_probability: Option<f64>,
-    pub(crate) bandwidth_limiter: Option<Option<SlidingWindowCounter<fn() -> Duration>>>,
+    pub(crate) bandwidth_limit: Option<Option<BandwithLimit>>,
     pub(crate) ordering: Option<ChokeSettingsOrder>,
 }
 
@@ -39,6 +39,20 @@ pub enum ChokeSettingsOrder {
     Backpressure,
 }
 
+pub(crate) struct BandwithLimit {
+    pub(crate) window: SlidingWindowCounter<fn() -> Duration>,
+    pub(crate) drop_ratio: f64,
+}
+
+impl std::fmt::Debug for BandwithLimit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BandwithLimit")
+            .field("window", &"fn() -> Duration")
+            .field("drop_ratio", &self.drop_ratio)
+            .finish()
+    }
+}
+
 impl std::fmt::Debug for ChokeSettings {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ChokeSettings")
@@ -53,14 +67,7 @@ impl std::fmt::Debug for ChokeSettings {
             .field("drop_probability", &self.drop_probability)
             .field("corrupt_probability", &self.corrupt_probability)
             .field("duplicate_probability", &self.duplicate_probability)
-            .field(
-                "bandwidth_limiter",
-                if self.bandwidth_limiter.is_some() {
-                    &"Some"
-                } else {
-                    &"None"
-                },
-            )
+            .field("bandwidth_limiter", &self.bandwidth_limit)
             .field("ordering", &self.ordering)
             .finish()
     }
@@ -76,17 +83,20 @@ impl ChokeSettings {
     }
 
     /// Set the bandwidth limit in bytes per second.
-    pub fn set_bandwidth_limit(mut self, bytes_per_seconds: Option<usize>) -> Self {
+    pub fn set_bandwidth_limit(mut self, bytes_per_seconds: Option<usize>, drop_ratio: f64) -> Self {
         match bytes_per_seconds {
             Some(bytes_per_seconds) if bytes_per_seconds > 0 => {
-                self.bandwidth_limiter = Some(Some(SlidingWindowCounter::new_with_time_provider(
-                    bytes_per_seconds as _,
-                    1000, /* ms */
-                    || SystemTime::now().duration_since(UNIX_EPOCH).unwrap(),
-                )));
+                self.bandwidth_limit = Some(Some(BandwithLimit {
+                    window: SlidingWindowCounter::new_with_time_provider(
+                        bytes_per_seconds as _,
+                        1000, /* ms */
+                        || SystemTime::now().duration_since(UNIX_EPOCH).unwrap(),
+                    ),
+                    drop_ratio,
+                }));
             }
             _ => {
-                self.bandwidth_limiter = Some(None);
+                self.bandwidth_limit = Some(None);
             }
         }
         self

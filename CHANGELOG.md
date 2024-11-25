@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.4.0] - 2024-11-25
+### Added
+- Allow setting bandwidth limits with drop probability.
+
 ## [0.3.0] - 2024-11-24
 - `ChokeSettingsOrder` to enforce ordered or unordered packet delivery (in combination with delays)
 - CLI to experiment with the library.
