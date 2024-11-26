@@ -1,16 +1,10 @@
+use crate::time::{
+    SystemTime,
+    UNIX_EPOCH,
+};
 use burster::SlidingWindowCounter;
 use std::time::Duration;
-#[cfg(not(target_arch = "wasm32"))]
-use std::time::{
-    SystemTime,
-    UNIX_EPOCH,
-};
 use tokio::sync::mpsc;
-#[cfg(target_arch = "wasm32")]
-use wasmtimer::std::{
-    SystemTime,
-    UNIX_EPOCH,
-};
 
 /// Settings for the [`crate::ChokeStream`] and [`crate::ChokeSink`].
 // Uses double options to allow for partial updates. See `ChokeStream::apply_settings`.
