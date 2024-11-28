@@ -12,7 +12,6 @@ license = "MPL-2.0"
 repository = "https://github.com/hypervideo/chokepoint"
 
 [workspace.dependencies]
-burster = "0.1.1"
 bytes = "1.8.0"
 chokepoint = { path = "." }
 chokepoint-test-helpers = { path = "./test-helpers" }
@@ -43,7 +42,6 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-burster.workspace = true
 bytes.workspace = true
 futures.workspace = true
 pin-project.workspace = true

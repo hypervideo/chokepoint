@@ -56,6 +56,7 @@ extern crate tracing;
 #[macro_use]
 extern crate pin_project;
 
+pub mod bandwidth_limiter;
 mod item;
 mod latency;
 mod settings;

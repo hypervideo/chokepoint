@@ -1,8 +1,4 @@
-use crate::time::{
-    SystemTime,
-    UNIX_EPOCH,
-};
-use burster::SlidingWindowCounter;
+use crate::bandwidth_limiter::BandwidthLimiter;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
@@ -16,7 +12,7 @@ pub struct ChokeSettings {
     pub(crate) drop_probability: Option<f64>,
     pub(crate) corrupt_probability: Option<f64>,
     pub(crate) duplicate_probability: Option<f64>,
-    pub(crate) bandwidth_limit: Option<Option<BandwithLimit>>,
+    pub(crate) bandwidth_limit: Option<Option<BandwidthLimit>>,
     pub(crate) ordering: Option<ChokeSettingsOrder>,
 }
 
@@ -33,12 +29,12 @@ pub enum ChokeSettingsOrder {
     Backpressure,
 }
 
-pub(crate) struct BandwithLimit {
-    pub(crate) window: SlidingWindowCounter<fn() -> Duration>,
+pub(crate) struct BandwidthLimit {
+    pub(crate) window: BandwidthLimiter,
     pub(crate) drop_ratio: f64,
 }
 
-impl std::fmt::Debug for BandwithLimit {
+impl std::fmt::Debug for BandwidthLimit {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("BandwithLimit")
             .field("window", &"fn() -> Duration")
@@ -80,12 +76,8 @@ impl ChokeSettings {
     pub fn set_bandwidth_limit(mut self, bytes_per_seconds: Option<usize>, drop_ratio: f64) -> Self {
         match bytes_per_seconds {
             Some(bytes_per_seconds) if bytes_per_seconds > 0 => {
-                self.bandwidth_limit = Some(Some(BandwithLimit {
-                    window: SlidingWindowCounter::new_with_time_provider(
-                        bytes_per_seconds as _,
-                        1000, /* ms */
-                        || SystemTime::now().duration_since(UNIX_EPOCH).unwrap(),
-                    ),
+                self.bandwidth_limit = Some(Some(BandwidthLimit {
+                    window: BandwidthLimiter::new(bytes_per_seconds, Duration::from_millis(1000)),
                     drop_ratio,
                 }));
             }

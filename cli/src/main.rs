@@ -158,7 +158,7 @@ async fn stream(
         debug!("using delay={:?}", delay);
         let now = Utc::now();
 
-        const CHUNKED: bool = false;
+        const CHUNKED: bool = true;
 
         if CHUNKED {
             let chunk_size = 10;

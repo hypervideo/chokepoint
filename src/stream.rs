@@ -1,6 +1,6 @@
 use crate::{
     item::ChokeItem,
-    settings::BandwithLimit,
+    settings::BandwidthLimit,
     time::{
         tokio_time::{
             interval,
@@ -11,7 +11,6 @@ use crate::{
     ChokeSettings,
     ChokeSettingsOrder,
 };
-use burster::Limiter;
 use futures::{
     Stream,
     StreamExt,
@@ -94,8 +93,7 @@ pub struct ChokeStream<T> {
     drop_probability: f64,
     corrupt_probability: f64,
     duplicate_probability: f64,
-    bandwidth_limit: Option<BandwithLimit>,
-    bandwidth_limit_active: bool,
+    bandwidth_limit: Option<BandwidthLimit>,
     timer: Interval,
     ordering: ChokeSettingsOrder,
     settings_rx: Option<mpsc::Receiver<ChokeSettings>>,
@@ -120,7 +118,6 @@ impl<T> ChokeStream<T> {
             corrupt_probability: 0.0,
             duplicate_probability: 0.0,
             bandwidth_limit: None,
-            bandwidth_limit_active: false,
             timer: interval(Duration::from_millis(20)),
             ordering,
             settings_rx: None,
@@ -404,27 +401,18 @@ where
                             debug!(bytes = %packet.byte_len(), "received packet");
                         }
 
+                        let bandwidth_drop = this.bandwidth_limit.as_mut().map_or(false, |limit| {
+                            limit.window.limit_reached() && rng.gen::<f64>() < limit.drop_ratio
+                        });
+
                         // Simulate packet loss
-                        if rng.gen::<f64>() < this.drop_probability {
+                        if bandwidth_drop || rng.gen::<f64>() < this.drop_probability {
                             if VERBOSE {
-                                debug!("dropped packet");
+                                debug!("dropped packet bandwith_drop={bandwidth_drop}");
                             }
                             this.dropped_packets += 1;
                             this.has_dropped_item = true;
                             continue;
-                        }
-
-                        if let (Some(BandwithLimit { drop_ratio, .. }), true) =
-                            (&this.bandwidth_limit, this.bandwidth_limit_active)
-                        {
-                            if rng.gen::<f64>() < *drop_ratio {
-                                if VERBOSE {
-                                    debug!("dropped packet (bandwidth)");
-                                }
-                                this.dropped_packets += 1;
-                                this.has_dropped_item = true;
-                                continue;
-                            }
                         }
 
                         // Simulate packet corruption
@@ -477,43 +465,28 @@ where
             // debug!(pending = this.queue.len(), "packet from queue");
 
             // Simulate bandwidth limita
-            let limit = this
-                .bandwidth_limit
-                .as_mut()
-                .map(|l| (l.window.try_consume(packet.byte_len() as _).is_err(), l.drop_ratio));
-            let packet = match (limit, this.bandwidth_limit_active) {
-                // No limit
-                (None, _) | (Some((false, _)), _) => Some(packet),
-
-                // Limit reached with this very packet; drop it
-                (Some((true, drop_ratio)), false) if rng.gen::<f64>() < drop_ratio => {
-                    if VERBOSE {
-                        debug!("dropped packet (bandwidth)");
-                    }
-                    this.dropped_packets += 1;
-                    this.has_dropped_item = true;
-                    this.bandwidth_limit_active = true;
-                    None
+            let limit = this.bandwidth_limit.as_mut().map_or(false, |limit| {
+                limit.window.update_at(now);
+                if !limit.window.limit_reached() {
+                    limit.window.add_request(packet.byte_len());
+                    false
+                } else {
+                    true
                 }
+            });
 
-                // Limit already reached or reached right now but delay packet until bandwidth clears up
-                (Some((true, _)), true) | (Some((true, _)), false) => {
-                    warn!("bandwidth limit exceeded");
-                    // If the packet cannot be sent due to bandwidth limitation, reinsert it into the queue
-                    this.queue.push_front(packet, None, now);
-                    this.bandwidth_limit_active = true;
-                    None
+            if limit {
+                if VERBOSE {
+                    debug!(i = %this.total_packets,"bandwidth limit reached");
                 }
-            };
-
-            if let Some(packet) = packet {
+                this.queue.push_front(packet, None, now);
+            } else {
                 if VERBOSE {
                     debug!("emitting packet");
                 }
 
                 this.total_packets += 1;
                 this.packets_per_second += 1;
-                this.bandwidth_limit_active = false;
 
                 // Poll the stream again immediately for processing the next packet
                 cx.waker().wake_by_ref();
