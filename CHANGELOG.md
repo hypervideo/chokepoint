@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.4.1] - 2024-11-28
+### Changed
+- Changed how the bandwidth drop rate is implemented for more realistic behavior.
+
 ## [0.4.0] - 2024-11-25
 ### Added
 - Allow setting bandwidth limits with drop probability.
