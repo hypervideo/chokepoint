@@ -427,7 +427,9 @@ where
                         let duplicate = (rng.gen::<f64>() < this.duplicate_probability)
                             .then(|| {
                                 if let Some(packet) = packet.duplicate() {
-                                    debug!("duplicated packet");
+                                    if VERBOSE {
+                                        debug!("duplicated packet");
+                                    }
                                     Some(packet)
                                 } else {
                                     warn!("Failed to duplicate packet");
