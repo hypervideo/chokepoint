@@ -387,7 +387,7 @@ where
         }
 
         let now = Instant::now();
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         // First, take packets from the receiver and process them.
         if !this.backpressure() || !this.queue.pending() {
@@ -402,11 +402,11 @@ where
                         }
 
                         let bandwidth_drop = this.bandwidth_limit.as_mut().map_or(false, |limit| {
-                            limit.window.limit_reached() && rng.gen::<f64>() < limit.drop_ratio
+                            limit.window.limit_reached() && rng.random::<f64>() < limit.drop_ratio
                         });
 
                         // Simulate packet loss
-                        if bandwidth_drop || rng.gen::<f64>() < this.drop_probability {
+                        if bandwidth_drop || rng.random::<f64>() < this.drop_probability {
                             if VERBOSE {
                                 debug!("dropped packet bandwith_drop={bandwidth_drop}");
                             }
@@ -416,7 +416,7 @@ where
                         }
 
                         // Simulate packet corruption
-                        if rng.gen::<f64>() < this.corrupt_probability {
+                        if rng.random::<f64>() < this.corrupt_probability {
                             packet.corrupt();
                         }
 
@@ -424,7 +424,7 @@ where
                         let delay = this.latency_distribution.as_mut().and_then(|latency_fn| latency_fn());
 
                         // Simulate packet duplication
-                        let duplicate = (rng.gen::<f64>() < this.duplicate_probability)
+                        let duplicate = (rng.random::<f64>() < this.duplicate_probability)
                             .then(|| {
                                 if let Some(packet) = packet.duplicate() {
                                     if VERBOSE {

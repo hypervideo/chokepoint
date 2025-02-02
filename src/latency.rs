@@ -13,7 +13,7 @@ pub fn normal_distribution(
 ) -> Option<impl FnMut() -> Option<Duration> + Send + Sync + 'static> {
     let normal = Normal::new(mean, std_dev).unwrap(); // mean = 10ms, std dev = 15ms
     Some(move || {
-        let latency = normal.sample(&mut rand::thread_rng()).clamp(0.0, max) as u64;
+        let latency = normal.sample(&mut rand::rng()).clamp(0.0, max) as u64;
         (latency > 0).then(|| std::time::Duration::from_millis(latency))
     })
 }
@@ -27,7 +27,7 @@ pub fn skewed_distribution(
 ) -> Option<impl FnMut() -> Option<Duration> + Send + Sync + 'static> {
     let skew_normal = SkewNormal::new(location, scale, shape).unwrap(); // location = 10ms, scale = 15ms, shape = 0.5
     Some(move || {
-        let latency = skew_normal.sample(&mut rand::thread_rng()).clamp(0.0, max) as u64;
+        let latency = skew_normal.sample(&mut rand::rng()).clamp(0.0, max) as u64;
         (latency > 0).then(|| std::time::Duration::from_millis(latency))
     })
 }
