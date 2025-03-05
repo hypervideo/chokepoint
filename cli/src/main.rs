@@ -48,6 +48,13 @@ struct Args {
     #[clap(long, help = "Packet drop probability", default_value = "0.0")]
     drop_prob: f64,
 
+    #[clap(
+        long,
+        action,
+        help = "Only drop when bandwidth limit is reached. Otherwise drop always according to drop_prob."
+    )]
+    only_drop_on_bandwidth_limit: bool,
+
     #[clap(long, value_parser = parse_ordering, default_value = "ordered")]
     ordering: ChokeSettingsOrder,
 
@@ -138,6 +145,7 @@ async fn stream(
         latency_distribution: LatencyDistribution { mean, stddev },
         bandwidth_limit,
         bandwidth_drop_prob,
+        only_drop_on_bandwidth_limit,
         ..
     }: Args,
 ) {
@@ -148,7 +156,11 @@ async fn stream(
         ChokeSettings::default()
             .set_ordering(Some(ordering))
             .set_latency_distribution(chokepoint::normal_distribution(mean, stddev, mean + stddev * 3.0))
-            .set_bandwidth_limit(bandwidth_limit.map(|b| b.as_u64() as usize), bandwidth_drop_prob)
+            .set_bandwidth_limit(
+                bandwidth_limit.map(|b| b.as_u64() as usize),
+                bandwidth_drop_prob,
+                only_drop_on_bandwidth_limit,
+            )
             .set_corrupt_probability(Some(0.0)),
     );
 
@@ -214,6 +226,7 @@ async fn sink(
         latency_distribution: LatencyDistribution { mean, stddev },
         bandwidth_limit,
         bandwidth_drop_prob,
+        only_drop_on_bandwidth_limit,
         ..
     }: Args,
 ) {
@@ -221,7 +234,11 @@ async fn sink(
         TestSink::default(),
         ChokeSettings::default()
             .set_ordering(Some(ordering))
-            .set_bandwidth_limit(bandwidth_limit.map(|b| b.as_u64() as usize), bandwidth_drop_prob)
+            .set_bandwidth_limit(
+                bandwidth_limit.map(|b| b.as_u64() as usize),
+                bandwidth_drop_prob,
+                only_drop_on_bandwidth_limit,
+            )
             .set_latency_distribution(normal_distribution(mean, stddev, mean + stddev * 3.0))
             .set_corrupt_probability(Some(0.0)),
     );

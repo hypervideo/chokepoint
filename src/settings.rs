@@ -32,6 +32,7 @@ pub enum ChokeSettingsOrder {
 pub(crate) struct BandwidthLimit {
     pub(crate) window: BandwidthLimiter,
     pub(crate) drop_ratio: f64,
+    pub(crate) only_drop_when_bandwidth_limit_reached: bool,
 }
 
 impl std::fmt::Debug for BandwidthLimit {
@@ -73,12 +74,18 @@ impl ChokeSettings {
     }
 
     /// Set the bandwidth limit in bytes per second.
-    pub fn set_bandwidth_limit(mut self, bytes_per_seconds: Option<usize>, drop_ratio: f64) -> Self {
+    pub fn set_bandwidth_limit(
+        mut self,
+        bytes_per_seconds: Option<usize>,
+        drop_ratio: f64,
+        only_drop_when_bandwidth_limit_reached: bool,
+    ) -> Self {
         match bytes_per_seconds {
             Some(bytes_per_seconds) if bytes_per_seconds > 0 => {
                 self.bandwidth_limit = Some(Some(BandwidthLimit {
                     window: BandwidthLimiter::new(bytes_per_seconds, Duration::from_millis(1000)),
                     drop_ratio,
+                    only_drop_when_bandwidth_limit_reached,
                 }));
             }
             _ => {

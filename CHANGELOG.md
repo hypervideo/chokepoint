@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Add option `only_drop_when_bandwidth_limit_reached` to bandwidth limit settings. When enabled, drop packets even if the `bandwidth_limit` has not been reached when processing packets.
+
 ## [0.4.2] - 2024-12-01
 
 ### Changed

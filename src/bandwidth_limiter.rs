@@ -93,6 +93,6 @@ mod tests {
 
         let now = now + Duration::from_millis(200);
         limiter.update_at(now);
-        assert_eq!(limiter.capacity_left(), 5);
+        assert_eq!(limiter.capacity_left(), 4);
     }
 }

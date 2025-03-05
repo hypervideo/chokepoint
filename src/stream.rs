@@ -60,7 +60,7 @@ const VERBOSE: bool = false;
 ///         // Set other parameters as needed
 ///         .set_drop_probability(Some(0.0))
 ///         .set_corrupt_probability(Some(0.0))
-///         .set_bandwidth_limit(Some(100 /* bytes per second */), 0.1 /* drop prob */),
+///         .set_bandwidth_limit(Some(100 /* bytes per second */), 0.1 /* drop prob */, true /* only drop when limit reached */),
 /// );
 ///
 /// // Spawn a task to send packets into the ChokeStream
@@ -402,7 +402,10 @@ where
                         }
 
                         let bandwidth_drop = this.bandwidth_limit.as_mut().map_or(false, |limit| {
-                            limit.window.limit_reached() && rng.gen::<f64>() < limit.drop_ratio
+                            if limit.only_drop_when_bandwidth_limit_reached && !limit.window.limit_reached() {
+                                return false;
+                            }
+                            rng.gen::<f64>() < limit.drop_ratio
                         });
 
                         // Simulate packet loss
