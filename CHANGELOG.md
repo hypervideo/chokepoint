@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.5.1] - 2025-04-18
+
+### Changed
+
+- Nothing, just dep updates
+
 ## [0.5.0] - 2025-02-02
 
 ### Changed
